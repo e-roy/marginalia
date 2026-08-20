@@ -1,0 +1,7 @@
+# Compiled output — rebuilt by `pnpm --filter marginalia-functions build`.
+lib/
+
+# Emulator-only secret values. Also matched by the root .gitignore; repeated here
+# so the rule travels with the directory it protects.
+.secret.local
+.env.local

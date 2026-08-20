@@ -38,3 +38,7 @@ Thumbs.db
 *.njsproj
 *.sln
 *.sw?
+
+# Speech-server credentials for the Functions emulator. Covered by *.local above,
+# but named explicitly because this repo is public and the cost of a miss is total.
+functions/.secret.local

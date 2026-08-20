@@ -1,0 +1,23 @@
+{
+  "name": "marginalia-functions",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Cloud Functions for Marginalia. The only code that may hold the speech-server credentials.",
+  "main": "lib/index.js",
+  "engines": {
+    "node": "22"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "firebase-admin": "^14.2.0",
+    "firebase-functions": "^7.3.2"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "typescript": "^7.0.2"
+  }
+}

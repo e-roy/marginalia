@@ -1,3 +1,10 @@
+# The Cloud Functions package is a workspace member so the supply-chain guards below
+# apply to it too, and so there is one lockfile rather than two. Its package.json uses
+# plain semver ranges (never `workspace:*`), because `firebase deploy` uploads that
+# file and runs its own install in the cloud, where this workspace does not exist.
+packages:
+  - functions
+
 # Supply-chain protection: refuse to install any package version published less than
 # 7 days ago (value is in MINUTES — 10080 = 7 days). Malicious releases are almost
 # always caught and unpublished well inside that window.

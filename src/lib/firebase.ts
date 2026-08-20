@@ -18,6 +18,7 @@ import {
   persistentLocalCache,
   persistentMultipleTabManager,
 } from 'firebase/firestore'
+import { connectFunctionsEmulator, getFunctions } from 'firebase/functions'
 import { connectStorageEmulator, getStorage } from 'firebase/storage'
 
 const config = {
@@ -43,9 +44,11 @@ export const db = initializeFirestore(app, {
 
 export const storage = getStorage(app)
 
-// Cloud Functions land in Milestone 2, together with their emulator entry in
-// firebase.json. Deliberately not exported yet: a functions client that isn't wired to
-// the emulator would silently point at production.
+/**
+ * Callable functions. The region must match the one the functions are deployed to
+ * (`functions/src/config.ts`) or every call 404s — the SDK builds the URL from it.
+ */
+export const functions = getFunctions(app, 'us-central1')
 
 export const usingEmulators = import.meta.env.VITE_USE_EMULATORS === 'true'
 
@@ -58,6 +61,7 @@ if (usingEmulators) {
     connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true })
     connectFirestoreEmulator(db, '127.0.0.1', 8080)
     connectStorageEmulator(storage, '127.0.0.1', 9199)
+    connectFunctionsEmulator(functions, '127.0.0.1', 5001)
     console.info(
       `[marginalia] Firebase emulators connected (project: ${config.projectId})`,
     )
