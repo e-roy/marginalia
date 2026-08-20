@@ -161,9 +161,26 @@ the phone's only job is to get bytes into Storage.
    writes the text back, and **deletes the Storage object**.
 4. **Display.** The phone is subscribed via `onSnapshot`, so notes fill in live.
    If the app was closed, the note is simply complete next time it opens.
-5. **Retry.** `retrySweep` runs every 5 minutes, picks up notes in `pending` or
-   `failed` with `attempts < 6`, and re-runs step 3 with exponential backoff.
-   When the Mac Mini wakes, the backlog drains itself.
+5. **Retry.** `retrySweep` runs every 5 minutes, picks up notes in `pending`
+   whose `nextAttemptAt` has passed and whose `attempts` are still under 6, and
+   re-runs step 3. When the Mac Mini wakes, the backlog drains itself.
+
+   `failed` is terminal, and a failure becomes terminal two ways: the attempts
+   ran out, or the request failed in a way that will fail identically next time
+   — `stt_rejected`, `no_stt_model`, `audio_too_large`, `audio_missing`. A
+   retryable failure goes back to `pending` with an exponential `nextAttemptAt`
+   and keeps its audio; a terminal one deletes the audio immediately, because
+   nothing will ever read it again.
+
+   **A crash is a different category and needs a different owner.** An
+   application failure is caught, recorded on the note, and rescheduled by the
+   sweep — the handler returns normally, so Eventarc sees a success. A crash
+   writes nothing at all: no attempt, no error, nothing for the sweep to find.
+   So `transcribeNote` sets `retry: true` and lets Eventarc redeliver, and
+   treats a `transcribing` lock older than ten minutes as dead and takes it
+   over. Without both, a single dropped delivery strands a note in `pending`
+   forever — and in the UI that is indistinguishable from one still in
+   progress.
 
 ### Where iOS actually bites
 
