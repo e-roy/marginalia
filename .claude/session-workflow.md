@@ -4,7 +4,7 @@
      at the start of every run. -->
 
 - **Vault:** `C:\Users\eric\Documents\Obsidian Vaults\marginalia`
-- **Verify:** `pnpm typecheck` then `pnpm build` <!-- must pass before wrap -->
+- **Verify:** `pnpm typecheck`, `pnpm lint`, then `pnpm build` <!-- must pass before wrap -->
 - **Commit policy:** wrap-only
 - **Team mode:** solo
 - **Optional vault sections:** Lessons

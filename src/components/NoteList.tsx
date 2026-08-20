@@ -47,7 +47,13 @@ function StatusLine({ note }: { note: NoteWithId }) {
   )
 }
 
-export function NoteList({ notes }: { notes: NoteWithId[] }) {
+interface NoteListProps {
+  notes: NoteWithId[]
+  /** Off on the book screen, where the notes are already grouped under their chapter. */
+  showChapter?: boolean
+}
+
+export function NoteList({ notes, showChapter = true }: NoteListProps) {
   if (notes.length === 0) {
     return (
       <p className="text-muted-foreground py-6 text-center text-sm">
@@ -66,17 +72,12 @@ export function NoteList({ notes }: { notes: NoteWithId[] }) {
               <span className="tabular-nums">{formatClockTime(note.recordedAt)}</span>
               <span aria-hidden>·</span>
               <span className="tabular-nums">{formatDuration(note.durationMs)}</span>
-              {note.chapter !== null ? (
+              {showChapter ? (
                 <>
                   <span aria-hidden>·</span>
-                  <span>Chapter {note.chapter}</span>
+                  <span>{note.chapter === null ? 'Unfiled' : `Chapter ${note.chapter}`}</span>
                 </>
-              ) : (
-                <>
-                  <span aria-hidden>·</span>
-                  <span>Unfiled</span>
-                </>
-              )}
+              ) : null}
             </div>
 
             {note.status === 'done' && text ? (

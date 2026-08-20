@@ -1,37 +1,45 @@
-import { LogOut } from 'lucide-react'
-import { useEffect, useMemo } from 'react'
+import { Keyboard, Library, LogOut } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 
-import { BookBar } from '@/components/BookBar'
+import { AddBookSheet } from '@/components/AddBookSheet'
+import { BookStrip } from '@/components/BookStrip'
+import { ChapterStepper } from '@/components/ChapterStepper'
 import { InstallCard } from '@/components/InstallCard'
 import { Mark } from '@/components/Mark'
 import { NoteList } from '@/components/NoteList'
 import { RecordButton } from '@/components/RecordButton'
 import { ServerCard } from '@/components/ServerCard'
+import { TypeNoteSheet } from '@/components/TypeNoteSheet'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { useBook, useLiveNotes } from '@/hooks/useLibrary'
+import { useBooks, useLiveNotes } from '@/hooks/useLibrary'
 import { usingEmulators } from '@/lib/firebase'
 import { isToday } from '@/lib/format'
-import { ensurePlaceholderBook, PLACEHOLDER_BOOK_ID } from '@/lib/notes'
 import { isRecordingSupported } from '@/lib/recorder'
 import { useAuth } from '@/stores/auth'
 import { initCapture, useCapture } from '@/stores/capture'
+import { resolveSelected, useLibrary } from '@/stores/library'
 
 /**
  * The one screen that matters on a phone: current book, current chapter, big button.
  * Opens ready to record (SPEC §8).
- *
- * Milestone 2 is the pipeline, not the shelf — the recent-books strip, the real chapter
- * UI, and typed notes are Milestone 3.
  */
 export function Now() {
   const user = useAuth((s) => s.user)
   const signOut = useAuth((s) => s.signOut)
   const uid = user?.uid ?? null
 
-  const book = useBook(uid)
+  const books = useBooks(uid)
   const notes = useLiveNotes(uid)
+
+  const selectedBookId = useLibrary((s) => s.selectedBookId)
+  const select = useLibrary((s) => s.select)
+  const book = resolveSelected(books, selectedBookId)
+
+  const [addingBook, setAddingBook] = useState(false)
+  const [typingNote, setTypingNote] = useState(false)
 
   const status = useCapture((s) => s.status)
   const elapsedMs = useCapture((s) => s.elapsedMs)
@@ -43,9 +51,14 @@ export function Now() {
   const supported = useMemo(() => isRecordingSupported(), [])
   const today = useMemo(() => notes.filter((note) => isToday(note.recordedAt)), [notes])
 
+  // What a note gets filed under. Rebuilt whenever the book or its chapter changes, so
+  // stepping the chapter between recordings files them separately.
+  const target = book
+    ? { id: book.id, title: book.title, chapter: book.currentChapter }
+    : null
+
   useEffect(() => {
     if (!uid) return
-    void ensurePlaceholderBook(uid)
     // Owns the queue-drain triggers for as long as someone is signed in.
     return initCapture(uid)
   }, [uid])
@@ -78,40 +91,67 @@ export function Now() {
             </p>
           </div>
         </div>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => void signOut()}
-          aria-label="Sign out"
-        >
-          <LogOut className="h-4 w-4" />
-        </Button>
+        <div className="flex items-center">
+          <Button variant="ghost" size="icon" asChild aria-label="Books">
+            <Link to="/books">
+              <Library className="h-4 w-4" />
+            </Link>
+          </Button>
+          <Button variant="ghost" size="icon" onClick={() => void signOut()} aria-label="Sign out">
+            <LogOut className="h-4 w-4" />
+          </Button>
+        </div>
       </header>
 
       <InstallCard />
 
       <Card>
         <CardContent className="flex flex-col gap-5 pt-6">
-          {uid ? <BookBar uid={uid} book={book} /> : null}
-
-          {supported ? (
-            <RecordButton
-              status={status}
-              elapsedMs={elapsedMs}
-              disabled={!uid || !book}
-              onToggle={() => {
-                if (!uid || !book) return
-                void toggle(uid, {
-                  id: PLACEHOLDER_BOOK_ID,
-                  title: book.title,
-                  chapter: book.currentChapter,
-                })
-              }}
+          {uid ? (
+            <BookStrip
+              books={books}
+              selectedId={book?.id ?? null}
+              onSelect={select}
+              onAdd={() => setAddingBook(true)}
             />
-          ) : (
+          ) : null}
+
+          {uid && book ? <ChapterStepper uid={uid} book={book} /> : null}
+
+          {/* Nothing to file a note under yet. The shelf is the whole prerequisite for
+              capture, so this replaces the record button rather than sitting beside a
+              disabled one. */}
+          {books.length === 0 ? (
+            <p className="text-muted-foreground py-4 text-center text-sm">
+              Add the book you&rsquo;re reading and the record button appears.
+            </p>
+          ) : !supported ? (
             <p className="text-muted-foreground py-6 text-center text-sm">
               This browser can&rsquo;t record audio. Open Marginalia in Safari or Chrome.
             </p>
+          ) : (
+            <div className="flex flex-col gap-3">
+              <RecordButton
+                status={status}
+                elapsedMs={elapsedMs}
+                disabled={!uid || !target}
+                onToggle={() => {
+                  if (!uid || !target) return
+                  void toggle(uid, target)
+                }}
+              />
+
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={status !== 'idle'}
+                onClick={() => setTypingNote(true)}
+                className="text-muted-foreground mx-auto"
+              >
+                <Keyboard className="h-3.5 w-3.5" />
+                type instead
+              </Button>
+            </div>
           )}
 
           {queuedCount > 0 ? (
@@ -142,6 +182,24 @@ export function Now() {
           Running against Firebase emulators ·{' '}
           <code className="text-xs">demo-marginalia</code>
         </p>
+      ) : null}
+
+      {uid ? (
+        <AddBookSheet
+          uid={uid}
+          open={addingBook}
+          onOpenChange={setAddingBook}
+          onAdded={select}
+        />
+      ) : null}
+
+      {uid && target ? (
+        <TypeNoteSheet
+          uid={uid}
+          target={target}
+          open={typingNote}
+          onOpenChange={setTypingNote}
+        />
       ) : null}
     </div>
   )

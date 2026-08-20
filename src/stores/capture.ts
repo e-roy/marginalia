@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 
 import { countAudio } from '@/lib/audioQueue'
-import { createVoiceNote, flushQueue } from '@/lib/notes'
+import { createVoiceNote, flushQueue, type NoteTarget } from '@/lib/notes'
 import {
   startRecording,
   type AutoStopReason,
@@ -9,12 +9,6 @@ import {
 } from '@/lib/recorder'
 
 export type CaptureStatus = 'idle' | 'starting' | 'recording' | 'saving'
-
-export interface CaptureBook {
-  id: string
-  title: string
-  chapter: number | null
-}
 
 interface CaptureState {
   status: CaptureStatus
@@ -25,7 +19,7 @@ interface CaptureState {
   error: string | null
   lastAutoStop: AutoStopReason | null
 
-  toggle: (uid: string, book: CaptureBook) => Promise<void>
+  toggle: (uid: string, book: NoteTarget) => Promise<void>
   refreshQueue: (uid: string) => Promise<void>
   flush: (uid: string) => Promise<void>
   dismissError: () => void
@@ -37,7 +31,7 @@ interface CaptureState {
  */
 let handle: RecordingHandle | null = null
 let ticker: ReturnType<typeof setInterval> | undefined
-let context: { uid: string; book: CaptureBook } | null = null
+let context: { uid: string; book: NoteTarget } | null = null
 
 function microphoneMessage(err: unknown): string {
   const name = err instanceof Error ? err.name : ''

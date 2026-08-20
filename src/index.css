@@ -7,6 +7,21 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* Radix writes `data-state="active|open|closed"` and
+   `data-orientation="horizontal|vertical"`, but the shadcn components that read them
+   are generated against shorthand `data-active:` / `data-open:` / `data-horizontal:`
+   variants. Without these definitions those classes compile to `[data-active]` and
+   friends, match nothing, and the component silently renders in its default state —
+   which laid the Books tab panel beside its tab list instead of under it, left every
+   tab looking unselected, and dropped the sheet's open/close animation. Defining the
+   variants here fixes Tabs, Sheet and Separator together and leaves the generated
+   files untouched, so `shadcn add` stays safe to re-run. */
+@custom-variant data-active (&[data-state="active"]);
+@custom-variant data-open (&[data-state="open"]);
+@custom-variant data-closed (&[data-state="closed"]);
+@custom-variant data-horizontal (&[data-orientation="horizontal"]);
+@custom-variant data-vertical (&[data-orientation="vertical"]);
+
 /* ── Iron-gall ink on laid paper ──────────────────────────────────────────────
    The same palette as the spec document: blue-black iron-gall ink, its oxidized
    brown as the secondary mark, on a laid-paper ground. Light is the base; dark
