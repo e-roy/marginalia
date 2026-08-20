@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-ssr/
+*.local
+
+# Environment — .env.example IS committed; real .env files are not.
+.env
+.env.*
+!.env.example
+
+# Firebase — .firebaserc names a real project, so it stays out of a public repo.
+# Select the project locally with `firebase use --add`.
+.firebaserc
+.firebase/
+*-debug.log
+firebase-debug.*.log
+firestore-debug.log
+ui-debug.log
+storage-debug.log
+database-debug.log
+pubsub-debug.log
+emulator-data/
+
+# Generated service worker artefacts (vite-plugin-pwa writes these into dist/)
+dev-dist/
+
+# Editors / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

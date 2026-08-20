@@ -1,0 +1,175 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/* Geist is self-hosted via @fontsource — deliberately not Google Fonts, so type
+   still renders when the app is offline on a phone. */
+@import "@fontsource-variable/geist";
+
+@custom-variant dark (&:is(.dark *));
+
+/* ── Iron-gall ink on laid paper ──────────────────────────────────────────────
+   The same palette as the spec document: blue-black iron-gall ink, its oxidized
+   brown as the secondary mark, on a laid-paper ground. Light is the base; dark
+   is night reading. */
+:root {
+  --radius: 0.625rem;
+
+  --background: #efede7;
+  --foreground: #1c2536;
+
+  --card: #f8f7f3;
+  --card-foreground: #1c2536;
+  --popover: #f8f7f3;
+  --popover-foreground: #1c2536;
+
+  --primary: #2e5e8c;
+  --primary-foreground: #f8f7f3;
+
+  --secondary: #e3dfd5;
+  --secondary-foreground: #1c2536;
+
+  --muted: #e7e4da;
+  --muted-foreground: #5a6474;
+
+  --accent: #efe7dc;
+  --accent-foreground: #8a5a2b;
+
+  --destructive: #a33a2b;
+  --destructive-foreground: #f8f7f3;
+
+  --border: #d9d5ca;
+  --input: #d9d5ca;
+  --ring: #2e5e8c;
+
+  --chart-1: #2e5e8c;
+  --chart-2: #8a5a2b;
+  --chart-3: #4a7a6a;
+  --chart-4: #8c6d9c;
+  --chart-5: #a33a2b;
+
+  --sidebar: #e7e4da;
+  --sidebar-foreground: #1c2536;
+  --sidebar-primary: #2e5e8c;
+  --sidebar-primary-foreground: #f8f7f3;
+  --sidebar-accent: #efe7dc;
+  --sidebar-accent-foreground: #8a5a2b;
+  --sidebar-border: #d9d5ca;
+  --sidebar-ring: #2e5e8c;
+}
+
+.dark {
+  --background: #15181e;
+  --foreground: #e6e3db;
+
+  --card: #1d212a;
+  --card-foreground: #e6e3db;
+  --popover: #1d212a;
+  --popover-foreground: #e6e3db;
+
+  --primary: #7fb0dd;
+  --primary-foreground: #15181e;
+
+  --secondary: #242932;
+  --secondary-foreground: #e6e3db;
+
+  --muted: #242932;
+  --muted-foreground: #9aa1ad;
+
+  --accent: #241e17;
+  --accent-foreground: #c99a64;
+
+  --destructive: #e06b58;
+  --destructive-foreground: #15181e;
+
+  --border: #2c323d;
+  --input: #2c323d;
+  --ring: #7fb0dd;
+
+  --chart-1: #7fb0dd;
+  --chart-2: #c99a64;
+  --chart-3: #7fbda8;
+  --chart-4: #b79ac9;
+  --chart-5: #e06b58;
+
+  --sidebar: #1d212a;
+  --sidebar-foreground: #e6e3db;
+  --sidebar-primary: #7fb0dd;
+  --sidebar-primary-foreground: #15181e;
+  --sidebar-accent: #241e17;
+  --sidebar-accent-foreground: #c99a64;
+  --sidebar-border: #2c323d;
+  --sidebar-ring: #7fb0dd;
+}
+
+@theme inline {
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, -apple-system, sans-serif;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  html {
+    /* Phone-first: kill the pull-to-refresh bounce that fights a capture UI, and
+       stop iOS inflating text in landscape. */
+    overscroll-behavior-y: none;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    /* Respect the notch / home indicator when installed to the Home Screen. */
+    padding: env(safe-area-inset-top) env(safe-area-inset-right)
+      env(safe-area-inset-bottom) env(safe-area-inset-left);
+    min-height: 100dvh;
+  }
+
+  /* Nothing in a capture app should be accidentally text-selected mid-tap,
+     but real content still needs to be selectable. */
+  button,
+  [role="button"] {
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+  }
+}

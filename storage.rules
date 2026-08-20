@@ -1,0 +1,20 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Audio is write-only from the client and transient by design: transcribeNote
+    // reads the object with the Admin SDK and deletes it as soon as the transcript
+    // commits. A bucket lifecycle rule sweeps anything a crashed run leaves behind.
+    match /users/{uid}/uploads/{noteId} {
+      allow write: if request.auth != null
+                   && request.auth.uid == uid
+                   && request.resource.size < 25 * 1024 * 1024
+                   && request.resource.contentType.matches('audio/.*');
+      allow read, delete: if false;
+    }
+
+    match /{allOther=**} {
+      allow read, write: if false;
+    }
+  }
+}
