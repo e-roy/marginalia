@@ -41,7 +41,7 @@ pnpm preview      # serve the production build (use this to test the service wor
 pnpm lint
 ```
 
-`pnpm typecheck` then `pnpm build` must both pass before wrapping a session.
+`pnpm typecheck`, `pnpm lint`, and `pnpm build` must all pass before wrapping a session.
 
 ## Stack and conventions
 

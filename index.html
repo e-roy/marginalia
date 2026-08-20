@@ -9,6 +9,9 @@
       content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no"
     />
     <meta name="theme-color" content="#1C2536" />
+    <!-- Both, deliberately: the standard name is what Chrome asks for, and iOS Safari
+         still reads only the `apple-` one. Dropping either loses a platform. -->
+    <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Marginalia" />

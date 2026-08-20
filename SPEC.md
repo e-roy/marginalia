@@ -462,6 +462,13 @@ it. Everything else is secondary.
   identity, so nothing needs creating. Adding a title is an optional aside.
 - **Recent books strip** shows the last four books touched. Switching is a tap;
   each book remembers its own `currentChapter`.
+- **Which book is selected is device-local**, held in `localStorage` under
+  `marginalia.selectedBook`, falling back to the most recently touched book when it
+  is missing or names a book that no longer exists. It is a resume pointer for one
+  phone, not user data — two devices may be mid-different-book, and switching should
+  not cost a Firestore write per tap. `currentChapter` is the opposite case and lives
+  on the book document, because it is per-book state the stepper mutates and the
+  Whisper prompt is built from.
 - **Never blocks on the network.** The note appears the instant you stop, as
   `Transcribing…`. Firestore writes go through the offline cache.
 - **Screen Wake Lock** held while recording so the phone doesn't sleep mid-note.

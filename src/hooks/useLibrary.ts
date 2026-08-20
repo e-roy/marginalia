@@ -1,8 +1,9 @@
-import { limit, onSnapshot, orderBy, query } from 'firebase/firestore'
-import { useEffect, useState } from 'react'
+import { limit, onSnapshot, orderBy, query, where } from 'firebase/firestore'
+import { useEffect, useMemo, useState } from 'react'
 
-import { bookRef, notesCollection } from '@/lib/notes'
-import type { Book, Note, NoteWithId } from '@/lib/types'
+import { booksCollection } from '@/lib/books'
+import { notesCollection } from '@/lib/notes'
+import type { Book, BookWithId, Note, NoteWithId } from '@/lib/types'
 
 /**
  * Live subscriptions. These are the reason the app never blocks on the network: a note
@@ -35,17 +36,78 @@ export function useLiveNotes(uid: string | null): NoteWithId[] {
   return uid ? notes : []
 }
 
-export function useBook(uid: string | null): Book | null {
-  const [book, setBook] = useState<Book | null>(null)
+/**
+ * Every book, in one subscription, sorted on the client.
+ *
+ * A reader has tens of books — the whole shelf is a few kilobytes, and holding it in
+ * memory means the recent-books strip, the shelf and the chapter stepper all read from
+ * one snapshot rather than three queries. It also sidesteps `orderBy('lastNoteAt')`,
+ * which sorts nulls last on a descending order and would therefore hide a book you had
+ * just added and not yet recorded against.
+ */
+export function useBooks(uid: string | null): BookWithId[] {
+  const [books, setBooks] = useState<BookWithId[]>([])
 
   useEffect(() => {
     if (!uid) return
     return onSnapshot(
-      bookRef(uid),
-      (snapshot) => setBook(snapshot.exists() ? (snapshot.data() as Book) : null),
-      (err) => console.error('[marginalia] book subscription failed', err),
+      booksCollection(uid),
+      (snapshot) => {
+        setBooks(snapshot.docs.map((entry) => ({ id: entry.id, ...(entry.data() as Book) })))
+      },
+      (err) => console.error('[marginalia] books subscription failed', err),
     )
   }, [uid])
 
-  return uid ? book : null
+  // Most recently used first: a book with no notes yet falls back to when it was added,
+  // and a document still waiting on its server timestamps counts as right now.
+  return useMemo(() => {
+    if (!uid) return []
+    const touchedAt = (book: BookWithId) =>
+      book.lastNoteAt?.toMillis() ?? book.createdAt?.toMillis() ?? Number.MAX_SAFE_INTEGER
+    return [...books].sort((a, b) => touchedAt(b) - touchedAt(a))
+  }, [uid, books])
+}
+
+export function useBook(books: BookWithId[], bookId: string | null): BookWithId | null {
+  return useMemo(
+    () => (bookId === null ? null : (books.find((book) => book.id === bookId) ?? null)),
+    [books, bookId],
+  )
+}
+
+/**
+ * One book's notes, oldest first within each chapter — the reading order, not the
+ * capture order. Backed by the `bookId, chapter, recordedAt` composite index.
+ */
+export function useBookNotes(uid: string | null, bookId: string | null): NoteWithId[] {
+  /**
+   * The snapshot is stored with the book it came from. Switching books would otherwise
+   * keep the previous book's notes on screen until the new subscription delivered —
+   * briefly, but showing the wrong book's notes under the right book's title.
+   */
+  const [loaded, setLoaded] = useState<{ bookId: string; notes: NoteWithId[] } | null>(null)
+
+  useEffect(() => {
+    if (!uid || !bookId) return
+    const forBook = query(
+      notesCollection(uid),
+      where('bookId', '==', bookId),
+      orderBy('chapter', 'asc'),
+      orderBy('recordedAt', 'asc'),
+    )
+
+    return onSnapshot(
+      forBook,
+      (snapshot) => {
+        setLoaded({
+          bookId,
+          notes: snapshot.docs.map((entry) => ({ id: entry.id, ...(entry.data() as Note) })),
+        })
+      },
+      (err) => console.error('[marginalia] book notes subscription failed', err),
+    )
+  }, [uid, bookId])
+
+  return loaded && loaded.bookId === bookId ? loaded.notes : []
 }

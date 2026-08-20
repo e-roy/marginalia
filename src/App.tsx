@@ -2,6 +2,8 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { Toaster } from '@/components/ui/sonner'
 import { UpdateToast } from '@/components/UpdateToast'
 import { Mark } from '@/components/Mark'
+import { Book } from '@/routes/Book'
+import { Books } from '@/routes/Books'
 import { Now } from '@/routes/Now'
 import { SignIn } from '@/routes/SignIn'
 import { useAuth } from '@/stores/auth'
@@ -30,6 +32,8 @@ export default function App() {
         <BrowserRouter>
           <Routes>
             <Route path="/" element={<Now />} />
+            <Route path="/books" element={<Books />} />
+            <Route path="/books/:bookId" element={<Book />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </BrowserRouter>

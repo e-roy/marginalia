@@ -66,6 +66,9 @@ export interface Book {
   updatedAt: Timestamp
 }
 
+/** A book as read back, carrying its document id. */
+export type BookWithId = Book & { id: string }
+
 export interface ServerHealth {
   ok: boolean // STT reachable
   llmOk: boolean // false if Ollama 502s — it fails independently
