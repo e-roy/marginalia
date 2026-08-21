@@ -35,13 +35,21 @@ Work **one milestone per session** (`SPEC.md §13`).
 ```bash
 pnpm dev          # Vite dev server
 pnpm emu          # Firebase emulator suite (demo-marginalia)
-pnpm typecheck    # tsc --noEmit
+pnpm typecheck    # tsc --noEmit, app AND functions
 pnpm build        # typecheck + production build
 pnpm preview      # serve the production build (use this to test the service worker)
 pnpm lint
+pnpm deploy       # everything, to the real project
+pnpm deploy:web   # hosting only — the fast loop when testing on a phone
 ```
 
 `pnpm typecheck`, `pnpm lint`, and `pnpm build` must all pass before wrapping a session.
+`typecheck` chains the functions package's own — the root `tsconfig.json` is
+`include: ["src"]`, so without that chain nothing type-checks `functions/src` at all.
+
+Both deploy commands run `pnpm build` first, via the `predeploy` hooks in
+`firebase.json`. Never `firebase deploy` bare from a shell that hasn't built — the
+hosting target serves whatever is sitting in `dist/`.
 
 ## Stack and conventions
 
