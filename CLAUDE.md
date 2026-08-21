@@ -42,8 +42,15 @@ pnpm lint
 pnpm deploy:check # dry run — validates rules, builds everything, deploys nothing
 pnpm deploy:all   # hosting + functions + firestore rules/indexes + storage rules
 pnpm deploy:web   # hosting only — the fast loop when testing on a phone
+pnpm deploy:fn    # functions only
 pnpm deploy:rules # firestore rules + indexes, and storage rules
 ```
+
+**Prefer the narrow ones.** `firebase deploy` releases hosting *after* functions, so a
+function that fails to create takes the hosting release down with it — the files upload,
+the log says "file upload complete", and the site still serves "Site Not Found". Seen
+2026-08-21 on the first deploy. Deploying hosting and functions separately keeps one
+failure from hiding the other.
 
 All four go through `scripts/deploy.mjs`, which raises `FUNCTIONS_DISCOVERY_TIMEOUT`
 for the same reason `scripts/emu.mjs` does — without it `firebase deploy` dies on this
