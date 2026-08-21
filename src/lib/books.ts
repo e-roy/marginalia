@@ -108,3 +108,18 @@ export function recordNoteOnBook(uid: string, bookId: string): Promise<void> {
     updatedAt: serverTimestamp(),
   })
 }
+
+/**
+ * The other half, for a deleted note.
+ *
+ * `lastNoteAt` is deliberately left where it is. It orders the recent-books strip by
+ * when you last *touched* a book, and recording a note then deleting it is still
+ * having touched it — so the stale value is the honest one. Correcting it would mean
+ * querying for the new newest note to adjust a tile's position in a five-tile strip.
+ */
+export function forgetNoteOnBook(uid: string, bookId: string): Promise<void> {
+  return updateDoc(bookRef(uid, bookId), {
+    noteCount: increment(-1),
+    updatedAt: serverTimestamp(),
+  })
+}

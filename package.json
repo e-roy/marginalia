@@ -9,11 +9,16 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
-    "typecheck": "tsc --noEmit",
+    "build": "pnpm typecheck && vite build",
+    "typecheck": "tsc --noEmit && pnpm --filter marginalia-functions typecheck",
     "preview": "vite preview",
     "lint": "eslint .",
-    "emu": "node scripts/emu.mjs"
+    "emu": "node scripts/emu.mjs",
+    "deploy:all": "node scripts/deploy.mjs",
+    "deploy:web": "node scripts/deploy.mjs --only hosting",
+    "deploy:fn": "node scripts/deploy.mjs --only functions",
+    "deploy:rules": "node scripts/deploy.mjs --only firestore,storage",
+    "deploy:check": "node scripts/deploy.mjs --dry-run"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.3.0",

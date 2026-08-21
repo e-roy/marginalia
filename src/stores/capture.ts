@@ -2,6 +2,7 @@ import { create } from 'zustand'
 
 import { countAudio } from '@/lib/audioQueue'
 import { createVoiceNote, flushQueue, type NoteTarget } from '@/lib/notes'
+import { isIos } from '@/lib/platform'
 import {
   startRecording,
   type AutoStopReason,
@@ -36,7 +37,21 @@ let context: { uid: string; book: NoteTarget } | null = null
 function microphoneMessage(err: unknown): string {
   const name = err instanceof Error ? err.name : ''
   if (name === 'NotAllowedError' || name === 'SecurityError') {
-    return 'Microphone access is blocked. Allow it in Settings, then try again.'
+    /**
+     * iOS gives an installed web app no per-app microphone toggle, so a bare "allow it
+     * in Settings" is advice the user cannot act on. Two things actually govern it, in
+     * the order worth trying:
+     *
+     * 1. Settings › Safari › Microphone. A global default of Deny blocks every site and
+     *    every installed web app, and no prompt is ever shown — which looks exactly like
+     *    a per-app denial and is far easier to fix.
+     * 2. The per-app grant, which only resets by removing the Home Screen icon and
+     *    adding it again. The prompt then appears on the first *record*, not at install.
+     */
+    if (isIos()) {
+      return 'Microphone blocked. Check Settings › Safari › Microphone is set to Ask, then tap record again.'
+    }
+    return 'Microphone access is blocked. Allow it in your browser settings, then try again.'
   }
   if (name === 'NotFoundError') return 'No microphone was found on this device.'
   if (err instanceof Error && err.message === 'recording-unsupported') {

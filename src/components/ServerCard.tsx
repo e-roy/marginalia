@@ -13,17 +13,28 @@ import type { ServerHealth } from '@/lib/types'
  * Which model actually gets used is deliberately *not* shown — it is recorded on each
  * note as `sttModel` after the fact, so the auto-pick is proved by a real transcript
  * rather than by a second copy of the picking logic living in the client.
+ *
+ * The list here stays **unfiltered**, unlike the transcription picker beside it in
+ * Settings. This is the inventory, and the whole reason it is worth looking at is that
+ * it contains things that are not transcription models — see `transcriptionModels` in
+ * `lib/settings.ts`.
+ *
+ * `cached` is the `lastHealth` the function wrote to the settings document. Without it
+ * this card would sit empty next to pickers full of models, which reads as a bug.
  */
-export function ServerCard() {
-  const [health, setHealth] = useState<ServerHealth | null>(null)
+export function ServerCard({ cached = null }: { cached?: ServerHealth | null }) {
+  const [fresh, setFresh] = useState<ServerHealth | null>(null)
   const [checking, setChecking] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // A check just made always wins over whatever was stored.
+  const health = fresh ?? cached
 
   const check = async () => {
     setChecking(true)
     setError(null)
     try {
-      setHealth(await checkServerHealth())
+      setFresh(await checkServerHealth())
     } catch (err) {
       // The callable's errors are already sanitized server-side; this covers the case
       // where the call itself never lands.

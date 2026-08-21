@@ -38,6 +38,9 @@ export default defineConfig({
     tailwindcss(),
     VitePWA({
       registerType: 'prompt',
+      // NOT 'autoUpdate'. 'prompt' leaves the new worker waiting instead of activating
+      // itself, which is what lets `AutoUpdate` hold the reload back until nothing is
+      // mid-recording. 'autoUpdate' would reload straight through a recording.
       includeAssets: ['favicon.svg', 'apple-touch-icon.png'],
       manifest: {
         name: 'Marginalia',

@@ -5,7 +5,12 @@
 
 - **Vault:** `C:\Users\eric\Documents\Obsidian Vaults\marginalia`
 - **Verify:** `pnpm typecheck`, `pnpm lint`, then `pnpm build` <!-- must pass before wrap -->
+- **Dev server:** `pnpm dev` (port 5173) <!-- delete if none — the implement hand-off
+  offers to start it; wrap-session makes sure it's stopped -->
 - **Commit policy:** wrap-only
+- **Plan approval:** agent <!-- agent | user — agent: the plan-reviewer agent verifies
+  plans against the vault's ADRs and lessons, escalating only ADR supersessions,
+  preference forks, and scope growth; user: you approve each plan -->
 - **Team mode:** solo
 - **Optional vault sections:** Lessons
 

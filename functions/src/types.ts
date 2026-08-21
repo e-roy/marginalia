@@ -14,8 +14,11 @@ export interface NoteDoc {
   status: NoteStatus;
   rawText: string | null;
   cleanText: string | null;
+  title: string | null; // LLM-suggested, 5-8 words
+  edited: boolean; // once hand-edited, re-polish won't overwrite
   durationMs: number | null;
   sttModel: string | null;
+  llmModel: string | null; // null if polish was skipped or rejected
   audioPath: string | null;
   attempts: number;
   error: { code: string; message: string } | null;

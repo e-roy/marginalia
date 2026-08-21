@@ -1,4 +1,5 @@
 import { AlertTriangle, CloudOff, Loader2 } from 'lucide-react'
+import { Link } from 'react-router-dom'
 
 import { formatClockTime, formatDuration } from '@/lib/format'
 import { noteText, type NoteStatus, type NoteWithId } from '@/lib/types'
@@ -14,7 +15,8 @@ const PENDING_LABELS: Record<Exclude<NoteStatus, 'done' | 'failed'>, string> = {
   transcribing: 'Transcribing…',
 }
 
-function StatusLine({ note }: { note: NoteWithId }) {
+/** Exported because the Note screen shows the same states for the same reasons. */
+export function StatusLine({ note }: { note: NoteWithId }) {
   // A finished note with nothing in it means Whisper heard no speech — a pocket
   // recording, or a tap that caught silence. Saying so beats an empty row.
   if (note.status === 'done') {
@@ -67,24 +69,31 @@ export function NoteList({ notes, showChapter = true }: NoteListProps) {
       {notes.map((note) => {
         const text = noteText(note)
         return (
-          <li key={note.id} className="border-border/60 flex flex-col gap-1 border-b pb-4 last:border-0">
-            <div className="text-muted-foreground flex items-center gap-2 text-xs">
-              <span className="tabular-nums">{formatClockTime(note.recordedAt)}</span>
-              <span aria-hidden>·</span>
-              <span className="tabular-nums">{formatDuration(note.durationMs)}</span>
-              {showChapter ? (
-                <>
-                  <span aria-hidden>·</span>
-                  <span>{note.chapter === null ? 'Unfiled' : `Chapter ${note.chapter}`}</span>
-                </>
-              ) : null}
-            </div>
+          <li key={note.id} className="border-border/60 border-b last:border-0">
+            {/* The whole row is the target — on a phone, a tappable line of prose is
+                easier to hit than any affordance that would fit beside it. */}
+            <Link
+              to={`/notes/${note.id}`}
+              className="hover:bg-accent/40 -mx-2 flex flex-col gap-1 rounded-md px-2 py-1 pb-4 transition-colors"
+            >
+              <div className="text-muted-foreground flex items-center gap-2 text-xs">
+                <span className="tabular-nums">{formatClockTime(note.recordedAt)}</span>
+                <span aria-hidden>·</span>
+                <span className="tabular-nums">{formatDuration(note.durationMs)}</span>
+                {showChapter ? (
+                  <>
+                    <span aria-hidden>·</span>
+                    <span>{note.chapter === null ? 'Unfiled' : `Chapter ${note.chapter}`}</span>
+                  </>
+                ) : null}
+              </div>
 
-            {note.status === 'done' && text ? (
-              <p className="text-sm leading-relaxed whitespace-pre-wrap">{text}</p>
-            ) : (
-              <StatusLine note={note} />
-            )}
+              {note.status === 'done' && text ? (
+                <p className="text-sm leading-relaxed whitespace-pre-wrap">{text}</p>
+              ) : (
+                <StatusLine note={note} />
+              )}
+            </Link>
           </li>
         )
       })}

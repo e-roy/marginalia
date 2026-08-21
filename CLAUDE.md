@@ -35,13 +35,43 @@ Work **one milestone per session** (`SPEC.md §13`).
 ```bash
 pnpm dev          # Vite dev server
 pnpm emu          # Firebase emulator suite (demo-marginalia)
-pnpm typecheck    # tsc --noEmit
+pnpm typecheck    # tsc --noEmit, app AND functions
 pnpm build        # typecheck + production build
 pnpm preview      # serve the production build (use this to test the service worker)
 pnpm lint
+pnpm deploy:check # dry run — validates rules, builds everything, deploys nothing
+pnpm deploy:all   # hosting + functions + firestore rules/indexes + storage rules
+pnpm deploy:web   # hosting only — the fast loop when testing on a phone
+pnpm deploy:fn    # functions only
+pnpm deploy:rules # firestore rules + indexes, and storage rules
 ```
 
+**Prefer the narrow ones.** `firebase deploy` releases hosting *after* functions, so a
+function that fails to create takes the hosting release down with it — the files upload,
+the log says "file upload complete", and the site still serves "Site Not Found". Seen
+2026-08-21 on the first deploy. Deploying hosting and functions separately keeps one
+failure from hiding the other.
+
+All four go through `scripts/deploy.mjs`, which raises `FUNCTIONS_DISCOVERY_TIMEOUT`
+for the same reason `scripts/emu.mjs` does — without it `firebase deploy` dies on this
+machine with `Cannot determine backend specification. Timeout after 10000`, which names
+neither the cause nor the fix.
+
+**Not `pnpm deploy`.** `deploy` is a built-in pnpm command, and the collision makes the
+bare form pass its own name through as an argument — `firebase deploy "deploy"`. Hence
+the `:all` suffix.
+
+A functions deploy asks you to confirm the retry policy on `transcribeNote`
+(`SPEC §4`, ADR-008) — that is expected. `--force` answers it non-interactively, but it
+also bypasses every other prompt, so prefer answering by hand.
+
 `pnpm typecheck`, `pnpm lint`, and `pnpm build` must all pass before wrapping a session.
+`typecheck` chains the functions package's own — the root `tsconfig.json` is
+`include: ["src"]`, so without that chain nothing type-checks `functions/src` at all.
+
+Both deploy commands run `pnpm build` first, via the `predeploy` hooks in
+`firebase.json`. Never `firebase deploy` bare from a shell that hasn't built — the
+hosting target serves whatever is sitting in `dist/`.
 
 ## Stack and conventions
 
