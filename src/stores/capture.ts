@@ -2,6 +2,7 @@ import { create } from 'zustand'
 
 import { countAudio } from '@/lib/audioQueue'
 import { createVoiceNote, flushQueue, type NoteTarget } from '@/lib/notes'
+import { isIos, isStandalone } from '@/lib/platform'
 import {
   startRecording,
   type AutoStopReason,
@@ -36,7 +37,16 @@ let context: { uid: string; book: NoteTarget } | null = null
 function microphoneMessage(err: unknown): string {
   const name = err instanceof Error ? err.name : ''
   if (name === 'NotAllowedError' || name === 'SecurityError') {
-    return 'Microphone access is blocked. Allow it in Settings, then try again.'
+    /**
+     * "Allow it in Settings" is advice that cannot be followed on the platform this app
+     * is built for. An installed iOS web app gets no per-app microphone toggle, so once
+     * the permission has been denied there is nothing in Settings to turn back on —
+     * removing the icon and adding it again is what actually clears it.
+     */
+    if (isIos() && isStandalone()) {
+      return 'Microphone access was denied. Remove Marginalia from your Home Screen, add it again, and choose Allow when it asks.'
+    }
+    return 'Microphone access is blocked. Allow it in your browser settings, then try again.'
   }
   if (name === 'NotFoundError') return 'No microphone was found on this device.'
   if (err instanceof Error && err.message === 'recording-unsupported') {
