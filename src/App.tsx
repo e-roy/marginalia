@@ -21,12 +21,18 @@ function Splash() {
 
 export default function App() {
   const status = useAuth((s) => s.status)
+  const signingIn = useAuth((s) => s.signingIn)
+
+  // `signingIn` covers the gap between the sign-in popup closing and Firebase reporting
+  // a session. Without it the sign-in screen reappears for that moment, which looks like
+  // the sign-in bounced rather than worked.
+  const pending = status === 'loading' || signingIn
 
   return (
     <>
       <UpdateToast />
       <Toaster position="top-center" />
-      {status === 'loading' ? (
+      {pending ? (
         <Splash />
       ) : status === 'signed-out' ? (
         <SignIn />

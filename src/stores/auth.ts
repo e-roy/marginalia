@@ -13,6 +13,15 @@ type AuthStatus = 'loading' | 'signed-in' | 'signed-out'
 interface AuthState {
   user: User | null
   status: AuthStatus
+  /**
+   * A sign-in is in flight.
+   *
+   * Separate from `status` because Firebase has no state for "the user is part-way
+   * through signing in": `status` stays `signed-out` until `onAuthStateChanged` fires,
+   * which is some time *after* the popup closes. Without this the sign-in screen comes
+   * back for that moment, which reads as the sign-in having failed.
+   */
+  signingIn: boolean
   /** Sanitized message safe to render. Never contains upstream URLs. */
   error: string | null
   signIn: () => Promise<void>
@@ -48,14 +57,19 @@ interface AuthState {
 export const useAuth = create<AuthState>((set) => ({
   user: null,
   status: 'loading',
+  signingIn: false,
   error: null,
 
   signIn: async () => {
-    set({ error: null })
+    set({ error: null, signingIn: true })
     const provider = new GoogleAuthProvider()
     try {
       await signInWithPopup(auth, provider)
+      // `signingIn` is deliberately NOT cleared here. `onAuthStateChanged` clears it,
+      // and it is the thing that actually knows the session exists — clearing it on this
+      // line would put the sign-in screen back for the gap in between.
     } catch (err) {
+      set({ signingIn: false })
       const code = err instanceof Error && 'code' in err ? String(err.code) : ''
 
       if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
@@ -86,6 +100,10 @@ export function initAuth() {
     useAuth.setState({
       user,
       status: user ? 'signed-in' : 'signed-out',
+      // Whatever was in flight has landed, either way. Clearing it here rather than in
+      // `signIn` is what closes the gap between the popup closing and the session
+      // existing — and it also covers a sign-in resolved by anything but that call.
+      signingIn: false,
     })
   })
 }
