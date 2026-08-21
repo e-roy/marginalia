@@ -1,4 +1,4 @@
-import { Keyboard, Library, LogOut } from 'lucide-react'
+import { Keyboard, Library, Settings as SettingsIcon } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -10,7 +10,6 @@ import { InstallCard } from '@/components/InstallCard'
 import { Mark } from '@/components/Mark'
 import { NoteList } from '@/components/NoteList'
 import { RecordButton } from '@/components/RecordButton'
-import { ServerCard } from '@/components/ServerCard'
 import { TypeNoteSheet } from '@/components/TypeNoteSheet'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -28,7 +27,6 @@ import { resolveSelected, useLibrary } from '@/stores/library'
  */
 export function Now() {
   const user = useAuth((s) => s.user)
-  const signOut = useAuth((s) => s.signOut)
   const uid = user?.uid ?? null
 
   const books = useBooks(uid)
@@ -97,8 +95,10 @@ export function Now() {
               <Library className="h-4 w-4" />
             </Link>
           </Button>
-          <Button variant="ghost" size="icon" onClick={() => void signOut()} aria-label="Sign out">
-            <LogOut className="h-4 w-4" />
+          <Button variant="ghost" size="icon" asChild aria-label="Settings">
+            <Link to="/settings">
+              <SettingsIcon className="h-4 w-4" />
+            </Link>
           </Button>
         </div>
       </header>
@@ -168,12 +168,6 @@ export function Now() {
         </CardHeader>
         <CardContent>
           <NoteList notes={today} />
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardContent className="pt-6">
-          <ServerCard />
         </CardContent>
       </Card>
 

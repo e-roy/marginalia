@@ -430,6 +430,16 @@ always best-effort and never blocks a transcript. A **Re-polish** action on the
 note screen re-runs Stage 3 on demand — also how notes captured while Ollama was
 down get cleaned up later.
 
+**Re-polish is the one place best-effort does not apply.** It writes only when
+Stage 3 actually produced text; otherwise it writes nothing and reports
+`llm_unavailable`. Swallowing the failure is right on the automatic path, where
+the alternative is losing a transcript — but on an explicit request the
+alternative is the note the user already had, and answering a tap by replacing a
+good polish with Stage 2 output would make the note worse. It is offered on any
+voice note that is `done`, not `edited`, and has a non-empty `rawText`; the
+empty case is excluded because the length gate rejects every result measured
+against a zero-length base.
+
 ---
 
 ## 8. Capture

@@ -8,5 +8,6 @@ initializeApp();
 // One region for every function, matching the Firestore location. See `config.ts`.
 setGlobalOptions({ region: REGION, maxInstances: 10 });
 
+export { repolishNote } from './repolishNote';
 export { serverHealth } from './serverHealth';
 export { transcribeNote } from './transcribeNote';

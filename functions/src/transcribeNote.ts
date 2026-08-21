@@ -3,6 +3,7 @@ import { getStorage } from 'firebase-admin/storage';
 import * as logger from 'firebase-functions/logger';
 import { onObjectFinalized } from 'firebase-functions/v2/storage';
 
+import { runCleanup } from './cleanup';
 import { REGION, SPEECH_API_KEY, SPEECH_BASE_URL, storageBucket } from './config';
 import { SpeechError, toClientError, toLogDetail, type SpeechErrorCode } from './errors';
 import { buildPrompt } from './prompt';
@@ -72,9 +73,13 @@ async function discardAudio(bucket: string, name: string): Promise<void> {
 }
 
 /**
- * Stage 1 of the pipeline. Fires on upload, transcribes, writes the text back, and
- * deletes the object. Stages 2 and 3 — the filler strip and the LLM polish — land in
- * M4; until then `cleanText` stays null and the UI falls back to `rawText`.
+ * The whole pipeline. Fires on upload, transcribes (Stage 1), cleans up (Stages 2 and
+ * 3 via `runCleanup`), writes both texts back, and deletes the object.
+ *
+ * `rawText` is stored verbatim and never overwritten; `cleanText` is what the UI
+ * shows. Note that `runCleanup` cannot throw an LLM error — see `cleanup.ts` — so an
+ * Ollama outage never reaches the failure classifier below and can never cost a note
+ * its transcript.
  */
 export const transcribeNote = onObjectFinalized(
   {
@@ -194,9 +199,16 @@ export const transcribeNote = onObjectFinalized(
         prompt: buildPrompt(note.bookTitle, book, note.chapter),
       });
 
+      // Stages 2 and 3. Best-effort by construction: at worst this returns the filler
+      // strip with `llmModel: null`, which the Note screen reads as "offer a re-polish".
+      const cleanup = await runCleanup(cfg, rawText, settings);
+
       await noteRef.update({
         status: 'done',
         rawText,
+        cleanText: cleanup.cleanText,
+        title: cleanup.title,
+        llmModel: cleanup.llmModel,
         sttModel: model,
         transcribedAt: FieldValue.serverTimestamp(),
         updatedAt: FieldValue.serverTimestamp(),
@@ -207,7 +219,14 @@ export const transcribeNote = onObjectFinalized(
 
       // The transcript has committed. The audio has served its only purpose.
       await discardAudio(bucket, objectName);
-      logger.info('transcribeNote: done', { uid, noteId, model, chars: rawText.length });
+      logger.info('transcribeNote: done', {
+        uid,
+        noteId,
+        model,
+        llmModel: cleanup.llmModel,
+        rawChars: rawText.length,
+        cleanChars: cleanup.cleanText.length,
+      });
     } catch (err) {
       const clientError = toClientError(err);
       const terminal = TERMINAL_CODES.has(clientError.code) || attempts >= MAX_ATTEMPTS;

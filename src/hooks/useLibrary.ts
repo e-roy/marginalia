@@ -2,8 +2,9 @@ import { limit, onSnapshot, orderBy, query, where } from 'firebase/firestore'
 import { useEffect, useMemo, useState } from 'react'
 
 import { booksCollection } from '@/lib/books'
-import { notesCollection } from '@/lib/notes'
-import type { Book, BookWithId, Note, NoteWithId } from '@/lib/types'
+import { noteRef, notesCollection } from '@/lib/notes'
+import { settingsRef } from '@/lib/settings'
+import type { Book, BookWithId, Note, NoteWithId, Settings } from '@/lib/types'
 
 /**
  * Live subscriptions. These are the reason the app never blocks on the network: a note
@@ -110,4 +111,65 @@ export function useBookNotes(uid: string | null, bookId: string | null): NoteWit
   }, [uid, bookId])
 
   return loaded && loaded.bookId === bookId ? loaded.notes : []
+}
+
+/**
+ * One note, live. The Note screen needs this rather than picking out of the feed,
+ * because the feed is capped at the newest 50 and a note is reachable by URL forever.
+ *
+ * `loading` is separate from a null note on purpose: "we have not heard yet" and "there
+ * is no such note" look identical otherwise, and the difference decides between showing
+ * a blank screen for a moment and redirecting away from a note that is about to arrive.
+ */
+export function useNote(
+  uid: string | null,
+  noteId: string | null,
+): { note: NoteWithId | null; loading: boolean } {
+  const [loaded, setLoaded] = useState<{ noteId: string; note: NoteWithId | null } | null>(null)
+
+  useEffect(() => {
+    if (!uid || !noteId) return
+    return onSnapshot(
+      noteRef(uid, noteId),
+      (snapshot) => {
+        setLoaded({
+          noteId,
+          note: snapshot.exists()
+            ? { id: snapshot.id, ...(snapshot.data() as Note) }
+            : null,
+        })
+      },
+      (err) => console.error('[marginalia] note subscription failed', err),
+    )
+  }, [uid, noteId])
+
+  // Keyed by the note it came from, so switching notes never shows the previous one's
+  // text under the new one's id — the same trap `useBookNotes` above avoids.
+  return useMemo(() => {
+    const current = loaded && loaded.noteId === noteId ? loaded : null
+    return { note: current?.note ?? null, loading: current === null }
+  }, [loaded, noteId])
+}
+
+/**
+ * The settings document, live. Null until it exists — which is normal, because nothing
+ * creates it until the first server check or the first pinned model.
+ *
+ * Live rather than fetched once because `lastHealth` is written by the `serverHealth`
+ * function, not by the client: the model lists appear in the pickers on their own when
+ * a check comes back.
+ */
+export function useSettings(uid: string | null): Settings | null {
+  const [settings, setSettings] = useState<Settings | null>(null)
+
+  useEffect(() => {
+    if (!uid) return
+    return onSnapshot(
+      settingsRef(uid),
+      (snapshot) => setSettings(snapshot.exists() ? (snapshot.data() as Settings) : null),
+      (err) => console.error('[marginalia] settings subscription failed', err),
+    )
+  }, [uid])
+
+  return uid ? settings : null
 }

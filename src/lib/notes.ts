@@ -1,5 +1,6 @@
 import {
   collection,
+  deleteDoc,
   doc,
   runTransaction,
   serverTimestamp,
@@ -11,7 +12,7 @@ import { httpsCallable } from 'firebase/functions'
 import { ref, uploadBytesResumable } from 'firebase/storage'
 
 import { deleteAudio, listAudio, putAudio, type QueuedAudio } from '@/lib/audioQueue'
-import { recordNoteOnBook } from '@/lib/books'
+import { forgetNoteOnBook, recordNoteOnBook } from '@/lib/books'
 import { db, functions, storage } from '@/lib/firebase'
 import type { Recording } from '@/lib/recorder'
 import type { ServerHealth } from '@/lib/types'
@@ -133,6 +134,27 @@ export function createTextNote(uid: string, text: string, book: NoteTarget): str
   return noteId
 }
 
+/**
+ * Delete a note, and whatever of it is still lying around.
+ *
+ * The device queue is cleared first, because a `queued` note whose document is gone
+ * would otherwise still be uploaded on the next flush, fire the trigger, and be
+ * discarded server-side — correct, but a pointless round trip on mobile data.
+ *
+ * Audio already in Storage is not this function's problem and could not be: the
+ * Storage rules deny the client `delete` outright. `transcribeNote` deletes any object
+ * whose note has vanished, and the bucket lifecycle rule is the backstop behind that.
+ */
+export async function deleteNote(uid: string, noteId: string, bookId: string): Promise<void> {
+  await deleteAudio(noteId)
+  await deleteDoc(noteRef(uid, noteId))
+
+  // Not awaited, matching the way the counter is bumped on the way in. It is a display
+  // figure on the shelf, and a failure here must never report a completed delete as
+  // failed — the note is already gone.
+  void forgetNoteOnBook(uid, bookId)
+}
+
 async function uploadOne(entry: QueuedAudio): Promise<void> {
   // `transcribeNote` fires on the object and then looks for the note document. If the
   // audio landed first, the function would find nothing to attach a transcript to and
@@ -205,5 +227,27 @@ export async function flushQueue(uid: string): Promise<{ uploaded: number; faile
 export async function checkServerHealth(): Promise<ServerHealth> {
   const call = httpsCallable<undefined, ServerHealth>(functions, 'serverHealth')
   const result = await call()
+  return result.data
+}
+
+/**
+ * Re-run the cleanup pipeline on a note's stored `rawText` (SPEC §7). Used for a note
+ * captured while Ollama was asleep, and for re-running one through a different model.
+ *
+ * The explicit timeout is load-bearing. It is the outermost of three nested deadlines —
+ * the polish request gives up at 45s and the function at 90s — and the SDK's own
+ * default is 70s, which would sit *inside* the function's budget and report a failure
+ * for a call that was about to write. The write reaches the screen through `onSnapshot`
+ * regardless; this promise only drives a spinner.
+ */
+const REPOLISH_TIMEOUT_MS = 120_000
+
+export async function repolishNote(noteId: string): Promise<{ llmModel: string }> {
+  const call = httpsCallable<{ noteId: string }, { llmModel: string }>(
+    functions,
+    'repolishNote',
+    { timeout: REPOLISH_TIMEOUT_MS },
+  )
+  const result = await call({ noteId })
   return result.data
 }

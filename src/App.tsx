@@ -4,7 +4,9 @@ import { UpdateToast } from '@/components/UpdateToast'
 import { Mark } from '@/components/Mark'
 import { Book } from '@/routes/Book'
 import { Books } from '@/routes/Books'
+import { Note } from '@/routes/Note'
 import { Now } from '@/routes/Now'
+import { Settings } from '@/routes/Settings'
 import { SignIn } from '@/routes/SignIn'
 import { useAuth } from '@/stores/auth'
 
@@ -34,6 +36,8 @@ export default function App() {
             <Route path="/" element={<Now />} />
             <Route path="/books" element={<Books />} />
             <Route path="/books/:bookId" element={<Book />} />
+            <Route path="/notes/:noteId" element={<Note />} />
+            <Route path="/settings" element={<Settings />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </BrowserRouter>
