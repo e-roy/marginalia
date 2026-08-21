@@ -1,6 +1,6 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { Toaster } from '@/components/ui/sonner'
-import { UpdateToast } from '@/components/UpdateToast'
+import { AutoUpdate } from '@/components/AutoUpdate'
 import { Mark } from '@/components/Mark'
 import { Book } from '@/routes/Book'
 import { Books } from '@/routes/Books'
@@ -30,7 +30,7 @@ export default function App() {
 
   return (
     <>
-      <UpdateToast />
+      <AutoUpdate />
       <Toaster position="top-center" />
       {pending ? (
         <Splash />
