@@ -14,8 +14,10 @@
     "preview": "vite preview",
     "lint": "eslint .",
     "emu": "node scripts/emu.mjs",
-    "deploy": "firebase deploy",
-    "deploy:web": "firebase deploy --only hosting"
+    "deploy:all": "node scripts/deploy.mjs",
+    "deploy:web": "node scripts/deploy.mjs --only hosting",
+    "deploy:rules": "node scripts/deploy.mjs --only firestore,storage",
+    "deploy:check": "node scripts/deploy.mjs --dry-run"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.3.0",

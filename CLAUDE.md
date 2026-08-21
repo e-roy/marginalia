@@ -39,9 +39,24 @@ pnpm typecheck    # tsc --noEmit, app AND functions
 pnpm build        # typecheck + production build
 pnpm preview      # serve the production build (use this to test the service worker)
 pnpm lint
-pnpm deploy       # everything, to the real project
+pnpm deploy:check # dry run — validates rules, builds everything, deploys nothing
+pnpm deploy:all   # hosting + functions + firestore rules/indexes + storage rules
 pnpm deploy:web   # hosting only — the fast loop when testing on a phone
+pnpm deploy:rules # firestore rules + indexes, and storage rules
 ```
+
+All four go through `scripts/deploy.mjs`, which raises `FUNCTIONS_DISCOVERY_TIMEOUT`
+for the same reason `scripts/emu.mjs` does — without it `firebase deploy` dies on this
+machine with `Cannot determine backend specification. Timeout after 10000`, which names
+neither the cause nor the fix.
+
+**Not `pnpm deploy`.** `deploy` is a built-in pnpm command, and the collision makes the
+bare form pass its own name through as an argument — `firebase deploy "deploy"`. Hence
+the `:all` suffix.
+
+A functions deploy asks you to confirm the retry policy on `transcribeNote`
+(`SPEC §4`, ADR-008) — that is expected. `--force` answers it non-interactively, but it
+also bypasses every other prompt, so prefer answering by hand.
 
 `pnpm typecheck`, `pnpm lint`, and `pnpm build` must all pass before wrapping a session.
 `typecheck` chains the functions package's own — the root `tsconfig.json` is
