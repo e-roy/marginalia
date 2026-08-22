@@ -28,6 +28,10 @@ export default defineConfig({
         // Rolldown (Vite 8) requires the function form here, not an object map.
         manualChunks(id: string) {
           if (/node_modules[\\/]@?firebase/.test(id)) return 'firebase'
+          // The barcode decoder, given a stable chunk name so the two service-worker
+          // rules below have something to match on. Only the lazy `Scan` route imports
+          // it, so naming the chunk does not pull it into the initial load.
+          if (/node_modules[\\/]@zxing/.test(id)) return 'zxing'
           return undefined
         },
       },
@@ -66,11 +70,35 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
-        // The service worker caches the APP SHELL ONLY.
+        // `globPatterns` sweeps in EVERY emitted .js, which would precache the barcode
+        // decoder for everyone — a large addition to a precache already carrying the
+        // app bundle, the firebase chunk, fonts and icons, re-downloaded on every
+        // deploy that rehashes it, for a feature most launches never touch. The
+        // pattern resolves against the build output root, so the `assets/` prefix is
+        // required; without it this silently matches nothing and the build still
+        // succeeds.
+        globIgnores: ['assets/zxing-*.js'],
+        // The service worker caches the APP SHELL, plus the scanner chunk once it has
+        // actually been fetched (below).
         // Firestore has its own IndexedDB persistence, and Storage uploads must never
         // be intercepted — caching either would corrupt sync. See CLAUDE.md.
         navigateFallbackDenylist: [/^\/__/],
-        runtimeCaching: [],
+        runtimeCaching: [
+          {
+            // The other half of the globIgnores above: excluded from the precache, but
+            // kept once someone actually opens the scanner, so the second scan works
+            // offline. This is our own application JavaScript with a content hash in
+            // its name — not Firestore or Storage traffic, which stay off limits.
+            urlPattern: /\/assets\/zxing-[^/]*\.js$/,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'zxing-decoder',
+              // The hash only moves when the dependency does; two entries is enough to
+              // cover an update without accumulating superseded copies forever.
+              expiration: { maxEntries: 2 },
+            },
+          },
+        ],
       },
       devOptions: {
         // Keep the SW out of `pnpm dev`. Test install/offline with

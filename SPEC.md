@@ -269,7 +269,8 @@ interface Book {
   title: string;
   authors: string[];
   coverUrl: string | null;        // covers.openlibrary.org
-  openLibraryKey: string | null;  // e.g. "/works/OL45804W"
+  openLibraryKey: string | null;  // search → work key "/works/OL45804W";
+                                  // barcode scan → edition key "/books/OL…M"
   isbn13: string | null;          // from the barcode scan
   status: 'reading' | 'finished' | 'shelved';
 
@@ -510,25 +511,49 @@ frequently wrong and you should never be stuck.
 
 ### ISBN barcode scan
 
-Lazy-loaded route — the decoder is ~200KB and must never touch the capture
-bundle.
+Lazy-loaded route (`/scan`), and the app's only one. Measured after M5, the
+decoder chunk is **477 KB raw / 125 KB gzip** — comfortably the largest thing
+that is not the Firebase SDK, and it must never touch the capture bundle.
 
-**Decoder.** iOS Safari has no `BarcodeDetector` API, so
-[`@zxing/browser`](https://github.com/zxing-js/browser) is the primary path.
-Use the native detector only where it exists:
+**Decoder — ZXing only.** `@zxing/browser`'s `BrowserMultiFormatOneDReader`,
+hinted to `EAN_13` via `DecodeHintType.POSSIBLE_FORMATS`. There is deliberately
+no native `BarcodeDetector` branch: Safari has never shipped the API, so on the
+primary target (ADR-005) ZXing is the only path the code can take; Chrome on
+Windows — where this is built and verified — has no support either, so the dev
+browser and the phone run the same decoder. The only beneficiary would be
+Android Chrome, which ADR-005 keeps functional but does not design for, and the
+native branch is the one that could never be exercised on any device this
+project has. TypeScript 7 does not declare `BarcodeDetector` at all, so the
+branch would also need a hand-written type declaration.
 
-```ts
-const detector = 'BarcodeDetector' in window
-  ? new BarcodeDetector({ formats: ['ean_13'] })
-  : await loadZxing();   // dynamic import
-```
+`@zxing/library` is a **direct** dependency, not just a transitive one:
+`@zxing/browser` re-exports only `BarcodeFormat`, and pnpm's strict linking will
+not resolve an app import of `DecodeHintType` through the parent package.
 
-**Camera.** `getUserMedia({ video: { facingMode: 'environment' } })`. HTTPS
-required, which Firebase Hosting gives. Works in an installed iOS PWA.
+**Camera.** `getUserMedia({ video: { facingMode: 'environment' } })` — a plain
+value, never `exact`, so a device without a rear camera falls back instead of
+throwing `OverconstrainedError`. HTTPS required, which Firebase Hosting gives.
+Render the `<video>` element ourselves with **`playsInline muted autoPlay`** and
+hand it to `decodeFromConstraints`; without `playsInline`, iOS Safari hoists the
+stream into its native fullscreen player and the viewfinder disappears.
+
+**Teardown is three calls, and only one of them releases the camera.**
+`controls.stop()` ends the decode loop, `BrowserCodeReader.releaseAllStreams()`
+stops the tracks, `cleanVideoSource()` detaches the element. `cleanVideoSource`
+alone nulls `srcObject` and never touches a track, so omitting
+`releaseAllStreams` leaves the hardware live behind the navigation and the iOS
+camera indicator lit. Runs on unmount, on a successful scan, and on
+`visibilitychange` → hidden; the restart on `visible` is guarded to the
+`scanning` state, or a scan that is mid-lookup would restart the camera just in
+time to navigate away with it running.
 
 **Validate before looking up.** Book barcodes are EAN-13 starting `978` or
 `979`. Check the ISBN-13 checksum and reject anything else — misreads are common
-and a bad lookup wastes a round trip and confuses the user.
+and a bad lookup wastes a round trip and confuses the user. A rejected read is
+silent and scanning continues; anything else means flashing an error at someone
+still bringing the barcode into frame. Note the format's own blind spot: the
+alternating 1/3 weighting cannot detect two adjacent digits swapped when they
+differ by exactly 5.
 
 **Lookup.** One call, returns title, authors, and cover:
 
@@ -536,7 +561,16 @@ and a bad lookup wastes a round trip and confuses the user.
 https://openlibrary.org/api/books?bibkeys=ISBN:{isbn13}&format=json&jscmd=data
 ```
 
+The response shape is **not** the search shape, verified against live data:
+the body is keyed by the literal string `ISBN:{isbn13}` and **a missing key is
+how "not found" arrives** — there is no 404; `authors` are objects carrying a
+`name`, and real records repeat an author under two keys, so deduplicate;
+`cover` holds complete URLs rather than the numeric `cover_i` search returns;
+and `key` is an **edition** key (`/books/OL…M`), not a work key. `publish_date`
+is a string, so no publication year is recorded from this path.
+
 Not found is normal, not an error. Prefill the ISBN, let the user type the rest.
+A timed-out or rate-limited lookup lands in exactly the same place.
 
 ### Open Library search
 
@@ -546,6 +580,15 @@ https://openlibrary.org/search.json?q={q}&fields=key,title,author_name,cover_i,f
 
 CORS-enabled, no API key, called directly from the browser. Debounce 300ms.
 Cover art: `https://covers.openlibrary.org/b/id/{cover_i}-M.jpg`.
+
+**Both Open Library calls carry their own deadline** — 8s for search, 12s for
+the ISBN lookup, composed with the caller's `AbortSignal` via `AbortSignal.any`.
+This is not theoretical: `search.json` has been observed timing out at ~21s
+reproducibly from a machine where `api/books` answered in under 4s. Without a
+deadline the sheet spins forever and never reaches "add it by hand", which is
+the fallback the whole section is built around. A superseded keystroke still
+resolves empty; a timeout must not, or the user gets a permanently blank list
+instead of the fallback.
 
 ### Manual
 

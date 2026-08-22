@@ -53,7 +53,7 @@ export function Book() {
   }
 
   return (
-    <div className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-5 px-5 py-6">
+    <div className="mx-auto flex min-h-[var(--app-height)] w-full max-w-md flex-col gap-5 px-5 py-6">
       <header className="flex items-center gap-2">
         <Button variant="ghost" size="icon" asChild aria-label="Back">
           <Link to="/books">

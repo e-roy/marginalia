@@ -84,9 +84,11 @@ hosting target serves whatever is sitting in `dist/`.
   designing custom UI. Only hand-roll what the registry doesn't have.
 - **zustand** for app-wide state. Component-local state stays local — don't reach for a
   store by default.
-- **`vite-plugin-pwa`** for the manifest and service worker. It caches the app shell
-  **only** — never Firestore traffic or Storage uploads. Firestore has its own IndexedDB
-  persistence.
+- **`vite-plugin-pwa`** for the manifest and service worker. It caches the app shell,
+  plus the barcode-decoder chunk once someone has actually opened the scanner — **never
+  Firestore traffic or Storage uploads.** Firestore has its own IndexedDB persistence.
+  The decoder is the one `runtimeCaching` entry: `globPatterns` would otherwise precache
+  125 kB gzip of ZXing for every install, including the many that never scan anything.
 
 ## Verifying work
 

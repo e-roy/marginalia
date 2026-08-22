@@ -1,5 +1,6 @@
-import { Loader2, Search } from 'lucide-react'
-import { useEffect, useState, type FormEvent } from 'react'
+import { Loader2, ScanBarcode, Search } from 'lucide-react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 
 import { BookCover } from '@/components/BookCover'
 import { Button } from '@/components/ui/button'
@@ -13,6 +14,7 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { createBook, type NewBook } from '@/lib/books'
+import { isCameraSupported } from '@/lib/camera'
 import { searchBooks, type BookCandidate } from '@/lib/openLibrary'
 
 interface AddBookSheetProps {
@@ -21,6 +23,14 @@ interface AddBookSheetProps {
   onOpenChange: (open: boolean) => void
   /** The new book is always selected straight away — you add one in order to use it. */
   onAdded: (bookId: string) => void
+  /**
+   * A draft to open straight into form mode with — how the scanner hands its result
+   * back. Read once, as the initial value of `draft`, so the parent must **remount**
+   * this component (via `key`) to deliver a new one. That is deliberate: the sheet
+   * clears `draft` on every close, so a prop alone could never seed a later open, and
+   * seeding through an effect would race the parent clearing its router state.
+   */
+  initialDraft?: Draft | null
 }
 
 /** Long enough that typing a title doesn't fire a request per keystroke (SPEC §9). */
@@ -32,11 +42,13 @@ const DEBOUNCE_MS = 300
  * display eats the space the moment you type it, so "Daniel Kahneman" becomes
  * "DanielKahneman".
  */
-interface Draft {
+export interface Draft {
   title: string
   authorsText: string
   coverUrl: string | null
   openLibraryKey: string | null
+  /** Set only by the scanner; the other two paths have no ISBN to offer. */
+  isbn13: string | null
 }
 
 function draftFrom(candidate: BookCandidate): Draft {
@@ -45,7 +57,13 @@ function draftFrom(candidate: BookCandidate): Draft {
     authorsText: candidate.authors.join(', '),
     coverUrl: candidate.coverUrl,
     openLibraryKey: candidate.openLibraryKey,
+    isbn13: candidate.isbn13,
   }
+}
+
+/** A blank form, which is what "add it by hand" and a book Open Library doesn't know both start from. */
+function emptyDraft(title: string, isbn13: string | null = null): Draft {
+  return { title, authorsText: '', coverUrl: null, openLibraryKey: null, isbn13 }
 }
 
 function toNewBook(draft: Draft): NewBook {
@@ -57,6 +75,9 @@ function toNewBook(draft: Draft): NewBook {
       .filter((name) => name.length > 0),
     coverUrl: draft.coverUrl,
     openLibraryKey: draft.openLibraryKey,
+    // `Book.isbn13` has existed since M3 and nothing ever wrote a non-null value into
+    // it. The scanner is what finally does.
+    isbn13: draft.isbn13,
   }
 }
 
@@ -68,7 +89,17 @@ function toNewBook(draft: Draft): NewBook {
  * Open Library metadata is frequently wrong, and the moment to fix it is before the
  * book exists, not after.
  */
-export function AddBookSheet({ uid, open, onOpenChange, onAdded }: AddBookSheetProps) {
+export function AddBookSheet({
+  uid,
+  open,
+  onOpenChange,
+  onAdded,
+  initialDraft = null,
+}: AddBookSheetProps) {
+  const navigate = useNavigate()
+  const location = useLocation()
+  const cameraAvailable = useMemo(() => isCameraSupported(), [])
+
   const [query, setQuery] = useState('')
   /**
    * Results and failures are stored with the query they belong to, and the "searching"
@@ -79,7 +110,7 @@ export function AddBookSheet({ uid, open, onOpenChange, onAdded }: AddBookSheetP
   const [found, setFound] = useState<{ query: string; hits: BookCandidate[] } | null>(null)
   const [failed, setFailed] = useState<{ query: string; message: string } | null>(null)
   /** Non-null puts the sheet in form mode: null is the search list. */
-  const [draft, setDraft] = useState<Draft | null>(null)
+  const [draft, setDraft] = useState<Draft | null>(initialDraft)
 
   const trimmed = query.trim()
   const hits = found?.query === trimmed ? found.hits : null
@@ -138,7 +169,7 @@ export function AddBookSheet({ uid, open, onOpenChange, onAdded }: AddBookSheetP
         if (!next) reset()
       }}
     >
-      <SheetContent side="bottom" className="max-h-[85dvh] overflow-y-auto">
+      <SheetContent side="bottom" className="overflow-y-auto">
         <SheetHeader>
           <SheetTitle>{draft ? 'Add this book' : 'Add a book'}</SheetTitle>
           <SheetDescription>
@@ -248,18 +279,28 @@ export function AddBookSheet({ uid, open, onOpenChange, onAdded }: AddBookSheetP
               </ul>
             ) : null}
 
-            {/* Always available, always the fallback — including when the search is
-                unreachable, which on a phone is a normal Tuesday. */}
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() =>
-                setDraft({ title: trimmed, authorsText: '', coverUrl: null, openLibraryKey: null })
-              }
-              className="mt-1"
-            >
-              Add by hand
-            </Button>
+            <div className="mt-1 flex flex-col gap-2">
+              {/* The third path from SPEC §9. Hidden rather than disabled where there is
+                  no camera at all — an unusable control is worse than an absent one. */}
+              {cameraAvailable ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() =>
+                    void navigate('/scan', { state: { returnTo: location.pathname } })
+                  }
+                >
+                  <ScanBarcode className="h-4 w-4" />
+                  Scan barcode
+                </Button>
+              ) : null}
+
+              {/* Always available, always the fallback — including when the search is
+                  unreachable, which on a phone is a normal Tuesday. */}
+              <Button type="button" variant="outline" onClick={() => setDraft(emptyDraft(trimmed))}>
+                Add by hand
+              </Button>
+            </div>
           </div>
         )}
       </SheetContent>
