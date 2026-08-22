@@ -29,6 +29,21 @@
 :root {
   --radius: 0.625rem;
 
+  /**
+   * The height a screen can actually occupy.
+   *
+   * `body` carries the safe-area padding and is `border-box`, so its *content* box is
+   * a notch and a home indicator shorter than the viewport. A screen sized `100dvh`
+   * inside it therefore overflows by exactly the insets — about 80px on a notched
+   * iPhone — and the whole page scrolls a little on every route. Invisible on desktop,
+   * where every inset is 0, which is why it survived four milestones.
+   *
+   * Use this instead of `dvh` for anything meant to fill the screen.
+   */
+  --app-height: calc(
+    100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)
+  );
+
   --background: #efede7;
   --foreground: #1c2536;
 
@@ -187,4 +202,47 @@
     -webkit-tap-highlight-color: transparent;
     user-select: none;
   }
+
+  /* (The keyboard-inset rule for bottom sheets is deliberately NOT in this layer —
+     see below the closing brace.) */
 }
+
+/* Lift bottom sheets clear of the software keyboard.
+
+   iOS Safari overlays the keyboard instead of shrinking the layout viewport, so
+   `bottom: 0` puts a fixed sheet *behind* it — and because the sheet is fixed, iOS
+   cannot scroll the focused input into view the way it does for in-page content. Every
+   sheet in this app autofocuses something, so without this the add-book search box, the
+   scan and manual-entry buttons, and the whole type-a-note textarea sit under the
+   keyboard.
+
+   `--keyboard-inset` is maintained by `initKeyboardInset()` in `src/lib/keyboard.ts`
+   and falls back to 0px, so this rule is inert wherever there is no keyboard.
+
+   It lives here rather than in `src/components/ui/sheet.tsx` because `shadcn add` would
+   overwrite that file — ADR-011 settled the same question for the shorthand `data-*`
+   variants above.
+
+   The doubled `[data-side]` is not a typo. Sheet's own `data-[side=bottom]:bottom-0`
+   compiles to `.data-\[side\=bottom\]\:bottom-0[data-side="bottom"]` — one class plus
+   one attribute, (0,2,0), the same as the obvious two-attribute selector. On a tie the
+   later rule wins, and that is Tailwind's. Repeating the attribute makes this (0,3,0)
+   and settles it on specificity rather than on source or layer order.
+
+   **Deliberately not transitioned**, and that omission is load-bearing. An earlier
+   version eased `bottom` over 150ms; a running transition outranks every author
+   declaration including inline styles, so while one is in flight the property is pinned
+   to its start value. Combined with a browser that was not compositing, it made this
+   rule look like it was losing a cascade fight it was actually winning — hours went
+   into overriding something that was never overridden. iOS animates the keyboard
+   itself; a second easing on top only adds lag. */
+[data-slot="sheet-content"][data-side="bottom"][data-side="bottom"] {
+  bottom: var(--keyboard-inset, 0px);
+
+  /* Give back the height the offset took, or a tall sheet is pushed off the top of the
+     screen instead of scrolling. This rule owns the height outright — the
+     `max-h-[85dvh]` that used to sit on each sheet was removed so two places cannot
+     disagree about one number. Override per sheet with `--sheet-max-height`. */
+  max-height: min(var(--sheet-max-height, 85dvh), calc(100dvh - var(--keyboard-inset, 0px)));
+}
+

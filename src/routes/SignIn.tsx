@@ -8,7 +8,7 @@ export function SignIn() {
   const error = useAuth((s) => s.error)
 
   return (
-    <main className="flex min-h-dvh flex-col items-center justify-center gap-8 px-6 py-10">
+    <main className="flex min-h-[var(--app-height)] flex-col items-center justify-center gap-8 px-6 py-10">
       <div className="flex w-full max-w-sm flex-col items-center gap-8">
         <div className="flex flex-col items-center gap-5 text-center">
           <Mark className="h-20 w-20" />

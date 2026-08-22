@@ -7,6 +7,7 @@ import { BookCover } from '@/components/BookCover'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useBooks } from '@/hooks/useLibrary'
+import { useScannedDraft } from '@/hooks/useScannedDraft'
 import type { Book, BookWithId } from '@/lib/types'
 import { useAuth } from '@/stores/auth'
 import { useLibrary } from '@/stores/library'
@@ -51,9 +52,10 @@ export function Books() {
   const navigate = useNavigate()
 
   const [addingBook, setAddingBook] = useState(false)
+  const scanned = useScannedDraft()
 
   return (
-    <div className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-4 px-5 py-6">
+    <div className="mx-auto flex min-h-[var(--app-height)] w-full max-w-md flex-col gap-4 px-5 py-6">
       <header className="flex items-center justify-between gap-2">
         <Button variant="ghost" size="icon" asChild aria-label="Back">
           <Link to="/">
@@ -84,9 +86,17 @@ export function Books() {
 
       {uid ? (
         <AddBookSheet
+          key={scanned.key}
           uid={uid}
-          open={addingBook}
-          onOpenChange={setAddingBook}
+          initialDraft={scanned.draft}
+          // A returning scan opens the sheet on its own — the user already asked for
+          // this by scanning, and the tap that would otherwise open it happened on the
+          // previous screen.
+          open={addingBook || scanned.draft !== null}
+          onOpenChange={(next) => {
+            setAddingBook(next)
+            if (!next) scanned.clear()
+          }}
           // Adding from the shelf means you intend to read it: select it and go
           // straight to its page, rather than leaving the user to find it.
           onAdded={(bookId) => {

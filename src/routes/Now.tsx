@@ -14,6 +14,7 @@ import { TypeNoteSheet } from '@/components/TypeNoteSheet'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useBooks, useLiveNotes } from '@/hooks/useLibrary'
+import { useScannedDraft } from '@/hooks/useScannedDraft'
 import { usingEmulators } from '@/lib/firebase'
 import { isToday } from '@/lib/format'
 import { isRecordingSupported } from '@/lib/recorder'
@@ -37,6 +38,7 @@ export function Now() {
   const book = resolveSelected(books, selectedBookId)
 
   const [addingBook, setAddingBook] = useState(false)
+  const scanned = useScannedDraft()
   const [typingNote, setTypingNote] = useState(false)
 
   const status = useCapture((s) => s.status)
@@ -78,7 +80,7 @@ export function Now() {
   }, [lastAutoStop])
 
   return (
-    <div className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-5 px-5 py-6">
+    <div className="mx-auto flex min-h-[var(--app-height)] w-full max-w-md flex-col gap-5 px-5 py-6">
       <header className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <Mark className="h-9 w-9 shrink-0" />
@@ -180,9 +182,17 @@ export function Now() {
 
       {uid ? (
         <AddBookSheet
+          key={scanned.key}
           uid={uid}
-          open={addingBook}
-          onOpenChange={setAddingBook}
+          initialDraft={scanned.draft}
+          // A returning scan opens the sheet on its own — the user already asked for
+          // this by scanning, and the tap that would otherwise open it happened on the
+          // previous screen.
+          open={addingBook || scanned.draft !== null}
+          onOpenChange={(next) => {
+            setAddingBook(next)
+            if (!next) scanned.clear()
+          }}
           onAdded={select}
         />
       ) : null}

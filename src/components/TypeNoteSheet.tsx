@@ -49,7 +49,7 @@ export function TypeNoteSheet({ uid, target, open, onOpenChange }: TypeNoteSheet
         if (!next) setText('')
       }}
     >
-      <SheetContent side="bottom" className="max-h-[85dvh]">
+      <SheetContent side="bottom" className="overflow-y-auto">
         <SheetHeader>
           <SheetTitle>Type a note</SheetTitle>
           <SheetDescription>
