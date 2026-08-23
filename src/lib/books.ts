@@ -3,12 +3,18 @@ import {
   deleteField,
   doc,
   FieldPath,
+  getDocsFromServer,
   increment,
+  query,
   serverTimestamp,
   setDoc,
   updateDoc,
+  waitForPendingWrites,
+  where,
+  writeBatch,
 } from 'firebase/firestore'
 
+import { deleteAudio } from '@/lib/audioQueue'
 import { db } from '@/lib/firebase'
 import type { Book } from '@/lib/types'
 
@@ -107,6 +113,133 @@ export function recordNoteOnBook(uid: string, bookId: string): Promise<void> {
     lastNoteAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   })
+}
+
+/**
+ * The book's notes, built here rather than imported from `@/lib/notes`.
+ *
+ * That module already imports this one, for `recordNoteOnBook` / `forgetNoteOnBook`, so
+ * the dependency runs notes → books. Importing `notesCollection` back would close the
+ * loop; today's bundler tolerates it because every use is inside a function body, which
+ * is exactly the kind of thing that stops being true during a refactor. One duplicated
+ * path literal is the cheaper of the two.
+ */
+function notesOfUser(uid: string) {
+  return collection(db, `users/${uid}/notes`)
+}
+
+/** Firestore commits at most 500 operations per batch; the book document is one of them. */
+const BATCH_LIMIT = 450
+
+/**
+ * How long to wait for the server before calling a book undeletable.
+ *
+ * `getDocsFromServer` has no deadline of its own, and it does **not** reject promptly
+ * when the server goes away. On a cold instance it fails fast, but once a session is
+ * established the SDK treats a refused connection as transient and retries with backoff —
+ * observed hanging indefinitely against a stopped emulator, with the dialog spinning and
+ * its Escape key deliberately disabled. That is precisely the `search.json` hang M5 fixed
+ * on the Open Library side, and the fix is the same one: an explicit deadline, so the
+ * failure is a message you can act on rather than a spinner you cannot leave.
+ *
+ * Ten seconds is far longer than a single book's notes need over mobile data, and short
+ * enough that nobody waits on it twice.
+ */
+const READ_DEADLINE_MS = 10_000
+
+/** The sanitized code the UI maps to "no connection", matching Firestore's own. */
+export class ServerUnreachableError extends Error {
+  readonly code = 'unavailable'
+  constructor() {
+    super('Timed out reading the book’s notes from the server.')
+    this.name = 'ServerUnreachableError'
+  }
+}
+
+function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new ServerUnreachableError()), ms)
+  })
+  // The losing promise is left to settle on its own — there is no way to cancel a
+  // Firestore read, and it has no side effects to clean up.
+  return Promise.race([work, deadline]).finally(() => clearTimeout(timer))
+}
+
+/**
+ * Delete a book and every note filed under it (`SPEC §8`).
+ *
+ * **It reads the server — not the screen, and not the cache.** The Book screen's
+ * subscription cannot tell "this book has no notes" from "its notes have not arrived
+ * yet" (`useBookNotes` has no `loading` flag). Plain `getDocs` is worse: Firestore runs
+ * with `persistentLocalCache`, so offline it would cheerfully report zero notes for a
+ * book whose notes this device never fetched, and the cascade would delete the book alone
+ * and strand them server-side with nothing pointing at them. `getDocsFromServer` fails
+ * instead, and no connection meaning no delete is the honest trade — capture is what this
+ * app makes offline-first (ADR-001); deleting a book is deliberate management.
+ *
+ * `waitForPendingWrites` comes first because a server-source query cannot see a local
+ * write the server has not acknowledged, and both note constructors write unawaited. It
+ * is the same ordering hazard `uploadOne` guards against, for the same reason.
+ *
+ * Both are under `READ_DEADLINE_MS`, because neither has a deadline of its own and both
+ * wait on the network — see that constant for what "fails instead" actually costs when
+ * the server merely goes quiet rather than refusing outright.
+ *
+ * **The book document goes last.** A chunk failing partway then leaves the book with
+ * fewer notes — visible, and recoverable by tapping delete again. Deleting the book first
+ * would leave notes that nothing can reach, since its screen is the only route to them.
+ *
+ * Audio already in Storage is untouched, and could not be otherwise: the Storage rules
+ * deny the client `delete` outright. `transcribeNote` removes any object whose note has
+ * vanished and the bucket lifecycle rule is the backstop — exactly what `deleteNote`
+ * already relies on.
+ *
+ * `onCommitting` fires once the read has succeeded and the deletes are certain to go
+ * ahead, before any of them lands. It exists for the caller's navigation: the first batch
+ * hits the local cache the moment it is written, so a screen that waits for `commit()`
+ * sees its own book vanish underneath it while this is still resolving — the race
+ * `Note.tsx` documents for `deleteNote`. Everything above this callback can still fail
+ * without anything having been deleted, which is why the callback is here and not at the
+ * top.
+ */
+export async function deleteBook(
+  uid: string,
+  bookId: string,
+  onCommitting?: () => void,
+): Promise<void> {
+  // Both under the one deadline. `waitForPendingWrites` is the other call here that can
+  // wait on the network indefinitely — it resolves only once the server acks — so a
+  // deadline on the read alone would just move the hang one line up.
+  const notes = await withDeadline(
+    (async () => {
+      await waitForPendingWrites(db)
+      return getDocsFromServer(query(notesOfUser(uid), where('bookId', '==', bookId)))
+    })(),
+    READ_DEADLINE_MS,
+  )
+
+  onCommitting?.()
+
+  // Best-effort, and deliberately not fatal — `deleteNote` lets this throw, which is fine
+  // when one bad entry blocks one note and re-tapping is the fix. Here a single stuck
+  // IndexedDB row would make the book permanently undeletable. Skipping one costs a stale
+  // queue entry that gets uploaded once and discarded server-side, which is not a loss.
+  for (const note of notes.docs) {
+    try {
+      await deleteAudio(note.id)
+    } catch (err) {
+      console.warn('[marginalia] could not clear queued audio', note.id, err)
+    }
+  }
+
+  // Sequential commits, so the chunk carrying the book is genuinely the last to land.
+  const targets = [...notes.docs.map((note) => note.ref), bookRef(uid, bookId)]
+  for (let start = 0; start < targets.length; start += BATCH_LIMIT) {
+    const batch = writeBatch(db)
+    for (const target of targets.slice(start, start + BATCH_LIMIT)) batch.delete(target)
+    await batch.commit()
+  }
 }
 
 /**

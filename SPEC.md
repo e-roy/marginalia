@@ -556,7 +556,7 @@ it. Everything else is secondary.
 |---|---|
 | Now | Recent books, chapter stepper, record + type, today's notes |
 | Books | Shelf grouped by reading / finished / shelved; add book |
-| Book | Chapters with note counts; notes grouped by chapter; add titles |
+| Book | Chapters with note counts; notes grouped by chapter; add titles; delete book |
 | Note | Clean text (editable), raw toggle, re-polish, move chapter, delete |
 | Scan | Camera barcode scanner (lazy route) |
 | Search | Client-side across all notes |
