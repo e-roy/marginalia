@@ -6,6 +6,7 @@ import {
   serverTimestamp,
   setDoc,
   Timestamp,
+  updateDoc,
   waitForPendingWrites,
 } from 'firebase/firestore'
 import { httpsCallable } from 'firebase/functions'
@@ -155,6 +156,25 @@ export async function deleteNote(uid: string, noteId: string, bookId: string): P
   void forgetNoteOnBook(uid, bookId)
 }
 
+/**
+ * How long after an upload `retrySweep` should leave a note alone.
+ *
+ * `transcribeNote` normally fires within seconds of the object landing, and the sweep
+ * must not race it. Stamping the field here — rather than leaving it null until the
+ * first failure — is what lets the sweep's range query see every uploaded note: a
+ * Firestore inequality is type-scoped and skips `null`, so an unstamped note is
+ * invisible to `nextAttemptAt <= now` no matter how long it sits there. That is the
+ * exact shape of the stranded note ADR-008 was written about.
+ *
+ * A client clock is good enough. Skew only makes a retry early or late, and both the
+ * `done` guard and the `transcribing` lock make a duplicate run harmless.
+ *
+ * Not the same constant as the sweep's own `UNSTAMPED_AGE_MS`, which decides how old an
+ * *unstamped* note must be before the backstop query touches it. They start equal and
+ * are free to diverge.
+ */
+const UPLOAD_GRACE_MS = 5 * 60_000
+
 async function uploadOne(entry: QueuedAudio): Promise<void> {
   // `transcribeNote` fires on the object and then looks for the note document. If the
   // audio landed first, the function would find nothing to attach a transcript to and
@@ -181,6 +201,7 @@ async function uploadOne(entry: QueuedAudio): Promise<void> {
     if (snap.exists() && snap.get('status') === 'queued') {
       tx.update(noteRef(entry.uid, entry.noteId), {
         status: 'pending',
+        nextAttemptAt: Timestamp.fromMillis(Date.now() + UPLOAD_GRACE_MS),
         updatedAt: serverTimestamp(),
       })
     }
@@ -221,11 +242,50 @@ export async function flushQueue(uid: string): Promise<{ uploaded: number; faile
 }
 
 /**
- * Model discovery. Auth-required and server-side — the browser never contacts the
- * speech server, and no model name is hardcoded anywhere (SPEC §5).
+ * Put a note that gave up back in the queue for `retrySweep` to collect.
+ *
+ * Only meaningful while the audio still exists. A note that exhausted its six attempts
+ * keeps its recording — the server being asleep says nothing about the recording — and
+ * the bucket lifecycle rule reclaims it after about a day. A note that failed because
+ * the audio itself was rejected has already had those bytes deleted, and the Note
+ * screen offers no button for it.
+ *
+ * A plain client write rather than a callable, deliberately: the client already owns
+ * `queued → pending` in `uploadOne`, the security rules already scope writes to the
+ * user's own subtree, and adding a network round trip to a server would be a strange
+ * dependency for the one action whose whole purpose is recovering from that server
+ * being unreliable. Firestore's offline cache means the tap registers even with no
+ * signal, and the sweep sees it whenever the write lands.
  */
+export async function retryNote(uid: string, noteId: string): Promise<void> {
+  await updateDoc(noteRef(uid, noteId), {
+    status: 'pending',
+    // Back to a clean slate: the sweep bounds itself by `attempts`, so leaving it at
+    // six would mean the note was collected and immediately given up on again.
+    attempts: 0,
+    nextAttemptAt: Timestamp.now(),
+    error: null,
+    updatedAt: serverTimestamp(),
+  })
+}
+
+/**
+ * Model discovery, plus a real test of the cleanup model. Auth-required and
+ * server-side — the browser never contacts the speech server, and no model name is
+ * hardcoded anywhere (SPEC §5).
+ *
+ * The explicit timeout is load-bearing, for the same reason `REPOLISH_TIMEOUT_MS` is.
+ * Since M6 this call may spend 15s on discovery and a further 45s proving the cleanup
+ * model answers — and the SDK's own default is 70s, which would sit *inside* the
+ * function's 120s budget and report a failure for a check that was about to return.
+ * Outermost of three: 45s probe, 120s function, 150s here.
+ */
+const HEALTH_TIMEOUT_MS = 150_000
+
 export async function checkServerHealth(): Promise<ServerHealth> {
-  const call = httpsCallable<undefined, ServerHealth>(functions, 'serverHealth')
+  const call = httpsCallable<undefined, ServerHealth>(functions, 'serverHealth', {
+    timeout: HEALTH_TIMEOUT_MS,
+  })
   const result = await call()
   return result.data
 }

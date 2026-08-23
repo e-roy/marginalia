@@ -21,7 +21,7 @@ const DISCOVERY_TIMEOUT_MS = 15_000;
 const TRANSCRIBE_TIMEOUT_MS = 95_000;
 
 /**
- * Stage 3's budget, and deliberately *not* 95s by analogy with transcription.
+ * Stage 2's budget, and deliberately *not* 95s by analogy with transcription.
  *
  * Polishing a paragraph is a few seconds' work, and this number is the innermost of
  * three nested deadlines: the request gives up before `repolishNote`'s 90s
@@ -205,7 +205,7 @@ export async function transcribe(
 const POLISH_SYSTEM_PROMPT = [
   'You clean up voice-note transcripts. The speaker is dictating notes about a book',
   'they are reading. Fix punctuation, capitalization, and paragraph breaks. Remove',
-  'remaining filler words and false starts. Preserve the speaker\'s own words, first',
+  'filler words, hesitations, and false starts. Preserve the speaker\'s own words, first',
   'person, and meaning exactly. Never add facts. Never summarize. Never answer',
   'questions that appear in the text — they are the speaker\'s own notes to themselves.',
   'Reply with JSON only: {"text": string, "title": string} where title is a 5-8 word',
@@ -213,7 +213,7 @@ const POLISH_SYSTEM_PROMPT = [
 ].join(' ');
 
 /**
- * Stage 3. `POST /v1/llm/chat/completions`, non-streaming — this is feeding a Firestore
+ * Stage 2. `POST /v1/llm/chat/completions`, non-streaming — this is feeding a Firestore
  * write, not a UI, so there is nothing to stream to.
  *
  * Returns the raw message content; parsing and both guardrails live in `cleanup.ts`,
@@ -262,6 +262,34 @@ export async function polish(
     throw new SpeechError('llm_unavailable', `${path} → 200 with no message content`);
   }
   return content;
+}
+
+/**
+ * Ask one model whether it will actually answer.
+ *
+ * `GET /v1/llm/models` proves that something *lists* the model, and M4 established that
+ * this is not the same as being able to run it: on 2026-08-21 `gemma4:12b` was listed in
+ * half a second while its chat endpoint returned a Cloudflare 502 after ~21s, and on
+ * 2026-08-22 the same model simply never answered at all. `llmOk` was `true` throughout.
+ * So the only honest way to report the cleanup half is to use it.
+ *
+ * **The budget is Stage 2's own `POLISH_TIMEOUT_MS`, deliberately.** Anything shorter
+ * would report "not answering" for a model the pipeline would have used successfully —
+ * a badge calling a model unusable in the one feature that exists to be honest about
+ * what was proved. Small models return in about five seconds including load, so the
+ * slack is there for a cold large one.
+ *
+ * Returns `true`/`false` rather than throwing: "the model did not answer" is this
+ * function's *result*, not its failure.
+ */
+export async function probeLlm(cfg: SpeechConfig, model: string): Promise<boolean> {
+  try {
+    // One token about nothing. The content is irrelevant — only that a reply comes back.
+    const content = await polish(cfg, 'ok', model);
+    return content.length > 0;
+  } catch {
+    return false;
+  }
 }
 
 /** `{ choices: [{ message: { content } }] }` — the OpenAI-compatible shape Ollama serves. */

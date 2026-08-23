@@ -1,4 +1,4 @@
-import { ChevronLeft, Loader2, Sparkles, Trash2 } from 'lucide-react'
+import { ChevronLeft, Loader2, RotateCw, Sparkles, Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, Navigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -7,7 +7,7 @@ import { StatusLine } from '@/components/NoteList'
 import { Button } from '@/components/ui/button'
 import { useNote } from '@/hooks/useLibrary'
 import { formatClockTime, formatDuration } from '@/lib/format'
-import { deleteNote, repolishNote } from '@/lib/notes'
+import { deleteNote, repolishNote, retryNote } from '@/lib/notes'
 import { useAuth } from '@/stores/auth'
 
 /**
@@ -45,6 +45,7 @@ export function Note() {
 
   const [showRaw, setShowRaw] = useState(false)
   const [polishing, setPolishing] = useState(false)
+  const [retrying, setRetrying] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [deletedFrom, setDeletedFrom] = useState<string | null>(null)
@@ -69,7 +70,7 @@ export function Note() {
   const raw = note.rawText
   const clean = note.cleanText
 
-  // Nothing to toggle between when Stage 2 changed nothing and Stage 3 never ran, or
+  // Nothing to toggle between when the polish never ran, or
   // for a typed note, where both fields hold the same string by construction.
   const comparable = Boolean(raw && clean && raw !== clean)
   const body = showRaw ? raw : (clean ?? raw)
@@ -81,6 +82,31 @@ export function Note() {
     note.status === 'done' &&
     !note.edited &&
     (raw ?? '').trim().length > 0
+
+  /**
+   * A note that gave up is worth retrying only while its recording is still there.
+   * Attempt exhaustion keeps the audio — the Mac Mini being asleep says nothing about
+   * the recording — while a rejected or over-long file has already been deleted, and
+   * so has anything the bucket lifecycle rule has since reclaimed. `StatusLine` says
+   * so in words when this is false.
+   */
+  const canRetry = note.status === 'failed' && note.audioPath !== null
+
+  const retry = async () => {
+    if (!noteId) return
+    setRetrying(true)
+    try {
+      await retryNote(uid, noteId)
+      // Nothing to await beyond the write: the sweep runs every five minutes and the
+      // transcript arrives through onSnapshot whenever it lands.
+      toast.success('Back in the queue. It will be transcribed within a few minutes.')
+    } catch (err) {
+      console.error('[marginalia] retry failed', err)
+      toast.error("Couldn't put this note back in the queue.")
+    } finally {
+      setRetrying(false)
+    }
+  }
 
   const repolish = async () => {
     if (!noteId) return
@@ -146,11 +172,23 @@ export function Note() {
       {note.status === 'done' && body ? (
         <p className="text-sm leading-relaxed whitespace-pre-wrap">{body}</p>
       ) : (
-        <StatusLine note={note} />
+        <StatusLine note={note} withActions />
       )}
 
-      {comparable || canRepolish ? (
+      {comparable || canRepolish || canRetry ? (
         <div className="flex flex-wrap items-center gap-2">
+          {/* First, because on a failed note it is the only thing worth doing. */}
+          {canRetry ? (
+            <Button variant="outline" size="sm" disabled={retrying} onClick={() => void retry()}>
+              {retrying ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RotateCw className="h-3.5 w-3.5" />
+              )}
+              Try again
+            </Button>
+          ) : null}
+
           {comparable ? (
             <Button variant="outline" size="sm" onClick={() => setShowRaw(!showRaw)}>
               {showRaw ? 'Show cleaned up' : 'Show original'}

@@ -22,7 +22,7 @@ export interface Note {
 
   status: NoteStatus
   rawText: string | null // verbatim Whisper output, never overwritten
-  cleanText: string | null // after filler strip + polish — M4
+  cleanText: string | null // the LLM polish; null when it did not run
   title: string | null
   edited: boolean
 
@@ -71,7 +71,11 @@ export type BookWithId = Book & { id: string }
 
 export interface ServerHealth {
   ok: boolean // STT reachable
-  llmOk: boolean // false if Ollama 502s — it fails independently
+  llmOk: boolean // the model list came back — NOT that any of them will answer
+  /** The model actually tested: the pinned one, or what auto-pick would choose. */
+  llmProbed: string | null
+  /** It answered. The only field that proves cleanup will work. */
+  llmUsable: boolean
   stt: string[]
   llm: string[]
   checkedAt: string

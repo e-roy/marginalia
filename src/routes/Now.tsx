@@ -9,11 +9,12 @@ import { ChapterStepper } from '@/components/ChapterStepper'
 import { InstallCard } from '@/components/InstallCard'
 import { Mark } from '@/components/Mark'
 import { NoteList } from '@/components/NoteList'
+import { QueueCard } from '@/components/QueueCard'
 import { RecordButton } from '@/components/RecordButton'
 import { TypeNoteSheet } from '@/components/TypeNoteSheet'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { useBooks, useLiveNotes } from '@/hooks/useLibrary'
+import { useBooks, useFailedNotes, useLiveNotes } from '@/hooks/useLibrary'
 import { useScannedDraft } from '@/hooks/useScannedDraft'
 import { usingEmulators } from '@/lib/firebase'
 import { isToday } from '@/lib/format'
@@ -32,6 +33,7 @@ export function Now() {
 
   const books = useBooks(uid)
   const notes = useLiveNotes(uid)
+  const failed = useFailedNotes(uid)
 
   const selectedBookId = useLibrary((s) => s.selectedBookId)
   const select = useLibrary((s) => s.select)
@@ -156,11 +158,9 @@ export function Now() {
             </div>
           )}
 
-          {queuedCount > 0 ? (
-            <p className="text-muted-foreground text-center text-xs">
-              {queuedCount} recording{queuedCount === 1 ? '' : 's'} waiting to upload
-            </p>
-          ) : null}
+          {/* Replaces the bare queued count: what is in flight, and when the next
+              retry is due. Renders nothing when there is nothing to say. */}
+          <QueueCard queuedCount={queuedCount} notes={notes} failed={failed} />
         </CardContent>
       </Card>
 

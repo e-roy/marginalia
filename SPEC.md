@@ -26,9 +26,9 @@ on a desktop.
 | Multi-book | Recent-books strip on home; each book remembers its own chapter. |
 | Adding books | ISBN barcode scan, Open Library search, or manual entry |
 | Models | Discovered at runtime from the server. Never hardcoded. |
-| Cleanup | Deterministic filler strip, then a light LLM polish. Raw always retained. |
+| Cleanup | One LLM polish over the verbatim transcript. Raw always retained. |
 | Reading back | Same app with a desktop layout, plus per-book Markdown export |
-| Audio retention | None. Transient at every hop, deleted the moment a transcript commits. |
+| Audio retention | Transient at every hop, deleted the moment a transcript commits. A note that gave up keeps its audio so **Try again** can work, and the bucket lifecycle rule reclaims it after about a day. |
 | App Check | Deferred — Google sign-in already gates every path. |
 
 ---
@@ -161,16 +161,53 @@ the phone's only job is to get bytes into Storage.
    writes the text back, and **deletes the Storage object**.
 4. **Display.** The phone is subscribed via `onSnapshot`, so notes fill in live.
    If the app was closed, the note is simply complete next time it opens.
-5. **Retry.** `retrySweep` runs every 5 minutes, picks up notes in `pending`
-   whose `nextAttemptAt` has passed and whose `attempts` are still under 6, and
-   re-runs step 3. When the Mac Mini wakes, the backlog drains itself.
+5. **Retry.** `retrySweep` runs every 5 minutes and re-runs step 3 for notes
+   that are stuck, bounded by `attempts < 6`. When the Mac Mini wakes, the
+   backlog drains itself.
 
-   `failed` is terminal, and a failure becomes terminal two ways: the attempts
-   ran out, or the request failed in a way that will fail identically next time
-   — `stt_rejected`, `no_stt_model`, `audio_too_large`, `audio_missing`. A
-   retryable failure goes back to `pending` with an exponential `nextAttemptAt`
-   and keeps its audio; a terminal one deletes the audio immediately, because
-   nothing will ever read it again.
+   **Three queries, because there are three ways to get stuck.** All are
+   collection-group queries over `notes`, so their indexes need
+   `COLLECTION_GROUP` scope — not the same index a per-user query would use.
+
+   - `pending` with `nextAttemptAt <= now` — the backoff queue.
+   - `transcribing` with `updatedAt` older than 10 minutes — a run killed
+     mid-note. `transcribeNote` only takes a stale lock over when a redelivery
+     arrives; when the crash killed the delivery too, this is the only thing
+     that ever looks again.
+   - `pending` with `nextAttemptAt == null` and `updatedAt` older than the
+     grace window — the note nothing ever wrote to. A Firestore inequality is
+     type-scoped and **skips `null` entirely** (measured 2026-08-22), so the
+     first query cannot see the very notes ADR-008 is about.
+
+   Results are deduped by document path before processing, so a note can never
+   be transcribed twice in one pass.
+
+   **A wall-clock budget, not a fixed count.** The loop stops *starting* notes
+   after `BUDGET_MS`, leaving the note in flight room to finish:
+   `BUDGET_MS (100s) + worst single note (155s + 25s I/O) + overhead (20s) ≤
+   timeoutSeconds (300s) ≤ the 5-minute interval`. Too generous a budget would
+   let a killed run count an attempt without completing a request, and a note
+   could reach `failed` having never been transcribed once.
+
+   `failed` is terminal, and a failure becomes terminal two ways, which differ
+   in what happens to the audio:
+
+   - **The request will fail identically next time** — `stt_rejected`,
+     `no_stt_model`, `audio_too_large`, `audio_missing`. The audio is deleted
+     immediately, because nothing will ever read it again.
+   - **The attempts ran out.** The recording is fine and the server was not, so
+     the audio is **kept** and **Try again** on the Note screen resets the note
+     (`pending`, `attempts: 0`, `nextAttemptAt: now`) for the sweep to collect.
+     The bucket lifecycle rule reclaims it after about a day (§10).
+
+   A retryable failure goes back to `pending` with an exponential
+   `nextAttemptAt` and keeps its audio.
+
+   **The sweep issues one verdict of its own:** a dead lock that has already
+   exhausted its attempts is written `failed` with `run_interrupted`, keeping
+   its audio. Without it that note would be taken over every ten minutes
+   forever — the classifier that would have given up was the thing being
+   killed — and never reach the state where Try again is offered.
 
    **A crash is a different category and needs a different owner.** An
    application failure is caught, recorded on the note, and rescheduled by the
@@ -225,12 +262,30 @@ GET /v1/llm/models   → Ollama     (pulled models, via the /v1/llm/* catch-all)
 ```ts
 interface ServerHealth {
   ok: boolean;                 // STT reachable
-  llmOk: boolean;              // false if Ollama 502s — it fails independently
+  llmOk: boolean;              // the model list came back — NOT that any will answer
+  llmProbed: string | null;    // the model actually tested
+  llmUsable: boolean;          // it answered
   stt: string[];               // model ids
   llm: string[];               // model ids
   checkedAt: string;
 }
 ```
+
+**Listing is not proof, so the cleanup model is actually used.** Measured
+2026-08-21 and again 2026-08-22: `GET /v1/llm/models` returns every model in
+about half a second while `gemma4:12b` — the model auto-pick chooses — either
+502s after ~21s or never answers at all. `llmOk` was `true` throughout. So
+`serverHealth` resolves the model this user's next note *would* use (the pinned
+one, or auto-pick) and sends a minimal chat completion.
+
+The probe's budget is the polish's own 45s, deliberately: anything shorter would
+report "not answering" for a model the pipeline would have used successfully.
+That sets the deadline stack — 45s probe inside the function's 120s inside the
+client's 150s.
+
+The probe **reports**; it does not choose. Changing what auto-pick selects is a
+separate decision (see the backlog), and this exists so that decision has
+evidence.
 
 Called from Settings, and once on the first transcription of a cold start.
 
@@ -240,7 +295,7 @@ Called from Settings, and once on the first transcription of a cold start.
   the TTS model is preloaded alongside the STT models and will appear in the
   same list.
 - **LLM:** first available id. If the list is empty or `llmOk` is false, skip
-  Stage 3 entirely and keep Stage 2 output.
+  the polish entirely and keep the verbatim transcript.
 
 Settings lets you override both, and pin a choice once you know what you like.
 
@@ -313,7 +368,7 @@ interface Note {
 
   status: NoteStatus;         // text notes are born 'done'
   rawText: string | null;     // verbatim Whisper output, never overwritten
-  cleanText: string | null;   // after filler strip + polish
+  cleanText: string | null;   // the LLM polish; null when it did not run
   title: string | null;       // LLM-suggested, 5-8 words
   edited: boolean;            // once hand-edited, re-polish won't overwrite
 
@@ -326,8 +381,11 @@ interface Note {
   sttModel: string | null;    // what was actually used, recorded after the fact
   llmModel: string | null;    // null if polish was skipped or rejected
 
-  audioPath: string | null;   // nulled when the object is deleted
+  audioPath: string | null;   // nulled when the object is deleted, kept when it gave up
   attempts: number;
+  // Earliest time anyone should look at this note again. Written by the failure
+  // classifier, and stamped by the client at upload — an unstamped note is invisible
+  // to a `<=` range query, which is what retrySweep's third query exists to catch.
   nextAttemptAt: Timestamp | null;
   error: { code: string; message: string } | null;  // sanitized — see §2
 
@@ -344,16 +402,35 @@ function, or the pipeline. If you typed it, you meant it.
 **Composite indexes**
 
 - `notes`: `bookId ASC, chapter ASC, recordedAt ASC` — book detail
-- `notes`: `status ASC, nextAttemptAt ASC` — retry sweep
 - `notes`: `recordedAt DESC` — home feed
 - `books`: `lastNoteAt DESC` — recent-books strip
+
+`retrySweep` runs across every user, so its indexes are **`COLLECTION_GROUP`**
+scope. A `COLLECTION`-scoped index of the same fields cannot serve a
+`collectionGroup('notes')` query at all:
+
+- `notes`: `status ASC, nextAttemptAt ASC` — the backoff queue
+- `notes`: `status ASC, nextAttemptAt ASC, updatedAt ASC` — the unstamped backstop
+- `notes`: `status ASC, updatedAt ASC` — dead locks
+
+The first two are **not** redundant, and assuming they were is what broke the first
+deployed sweep. A composite index orders its entries by every field in turn and then by
+`__name__`. The backoff query orders by `nextAttemptAt, __name__`, so it needs an index
+where `__name__` comes straight after `nextAttemptAt`; in the three-field index
+`updatedAt` sits between them, and Firestore rejects the query with
+`FAILED_PRECONDITION`. Prefix matching covers *filters*, not the trailing sort position.
+
+`attempts < 6` is applied in code rather than as a second inequality filter,
+which would otherwise have to join every one of these indexes and every
+`orderBy`. The count of failed notes on the Now screen is a single equality
+filter, served by Firestore's automatic single-field index.
 
 ---
 
 ## 7. The cleanup pipeline
 
-Three stages inside `transcribeNote`, for voice notes only. Each later stage may
-fail without losing the note.
+Two stages inside `transcribeNote`, for voice notes only. Stage 2 may fail without
+losing the note.
 
 ### Stage 1 — Transcribe, with context
 
@@ -380,28 +457,7 @@ costs nothing and is the single biggest accuracy win available.
 
 The result is stored verbatim as `rawText` and never overwritten.
 
-### Stage 2 — Deterministic filler strip
-
-Fast, offline, no dependency on Ollama being awake. Deliberately conservative:
-
-```ts
-const FILLERS = /\b(?:um+|uh+|erm?|ah+|mm+|hmm+)\b[,.]?\s*/gi;
-const REPEATS = /\b(\w+)(\s+\1\b)+/gi;
-
-const stripped = raw
-  .replace(FILLERS, '')
-  .replace(REPEATS, '$1')
-  .replace(/\s+([,.!?;:])/g, '$1')
-  .replace(/\s{2,}/g, ' ')
-  .trim();
-```
-
-It deliberately does **not** strip `like`, `you know`, `I mean`, `sort of`, or
-`kind of`. Those carry real meaning often enough that removing them
-mechanically damages good sentences. They are left to Stage 3, which has the
-context to judge.
-
-### Stage 3 — Light LLM polish
+### Stage 2 — Light LLM polish
 
 `POST /v1/llm/chat/completions`, non-streaming — the function isn't feeding a
 UI. `temperature: 0.2`. Model from settings or auto-picked.
@@ -410,33 +466,41 @@ System prompt:
 
 > You clean up voice-note transcripts. The speaker is dictating notes about a
 > book they are reading. Fix punctuation, capitalization, and paragraph breaks.
-> Remove remaining filler words and false starts. Preserve the speaker's own
+> Remove filler words, hesitations, and false starts. Preserve the speaker's own
 > words, first person, and meaning exactly. Never add facts. Never summarize.
 > Never answer questions that appear in the text — they are the speaker's own
 > notes to themselves. Reply with JSON only:
 > `{"text": string, "title": string}` where title is a 5-8 word summary.
 
+**The model is given `rawText`, verbatim.** There was once a deterministic filler
+strip in front of it; ADR-016 removed it. Anything a regex deletes is deleted from
+the model's evidence too and it cannot ask for it back — and a repeated-word rule
+turns "I had had enough" into "I had enough", "no no no" into "no". Telling a false
+start from emphasis is a judgement about meaning: what the system prompt is for, and
+what a regex can never do.
+
 **Two guardrails, both mandatory:**
 
 1. **Length gate.** If the returned text is shorter than 60% or longer than
-   140% of the input, discard the polish, keep Stage 2 output, set
-   `llmModel: null`. This is what stops a small model from quietly summarizing a
+   140% of `rawText`, discard the polish and set both `cleanText` and
+   `llmModel` to null. This is what stops a small model from quietly summarizing a
    note into oblivion — the most likely failure mode in the whole system.
 2. **Reasoning-block strip.** Reasoning models emit `<think>…</think>`. Strip
    those before parsing JSON. Since the model is whatever Ollama has pulled,
    assume this rather than testing for it.
 
-If the LLM is unreachable the note still completes with Stage 2 text. Polish is
-always best-effort and never blocks a transcript. A **Re-polish** action on the
-note screen re-runs Stage 3 on demand — also how notes captured while Ollama was
-down get cleaned up later.
+If the LLM is unreachable the note still completes, with `cleanText: null`; the UI
+reads `cleanText ?? rawText`, so it shows the transcript. Polish is always
+best-effort and never blocks a transcript. A **Re-polish** action on the note screen
+re-runs it on demand — also how notes captured while Ollama was down get cleaned up
+later.
 
 **Re-polish is the one place best-effort does not apply.** It writes only when
-Stage 3 actually produced text; otherwise it writes nothing and reports
+the polish actually produced text; otherwise it writes nothing and reports
 `llm_unavailable`. Swallowing the failure is right on the automatic path, where
 the alternative is losing a transcript — but on an explicit request the
 alternative is the note the user already had, and answering a tap by replacing a
-good polish with Stage 2 output would make the note worse. It is offered on any
+good polish with a blank would make the note worse. It is offered on any
 voice note that is `done`, not `edited`, and has a non-empty `rawText`; the
 empty case is excluded because the length gate rejects every result measured
 against a zero-length base.
@@ -639,9 +703,18 @@ service firebase.storage {
 
 **Backstops**
 
-- A bucket lifecycle rule deletes anything under `uploads/` older than one day,
-  so a crashed function can never leave audio lying around. Given that audio is
-  never meant to be kept, this is what makes it true rather than merely intended.
+- A bucket lifecycle rule deletes anything under `users/` older than one day.
+  It covers the two cases `transcribeNote`'s own delete cannot: a run that
+  crashed before it, and a note that **gave up after six attempts and
+  deliberately keeps its audio** so that Try again has something to act on
+  (§4). The second is what makes this rule load-bearing rather than tidy —
+  without it, failed notes would accumulate audio with nothing to reclaim it.
+  Applied with `pnpm storage:lifecycle`; it is a bucket setting, so
+  `firebase deploy` cannot carry it.
+
+  GCS evaluates lifecycle asynchronously, so `age: 1` means **about** a day
+  rather than exactly 24 hours. Overstating that precision in a public repo
+  would be worse than the extra day.
 - Both secrets live only in Secret Manager. Never in the bundle, never in a
   shipped `.env`, never in Firestore, never in a client-facing error string.
 - **App Check is deferred.** With sign-in required on every path and no

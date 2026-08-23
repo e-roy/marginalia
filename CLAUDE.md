@@ -44,7 +44,13 @@ pnpm deploy:all   # hosting + functions + firestore rules/indexes + storage rule
 pnpm deploy:web   # hosting only — the fast loop when testing on a phone
 pnpm deploy:fn    # functions only
 pnpm deploy:rules # firestore rules + indexes, and storage rules
+pnpm storage:lifecycle  # apply the bucket lifecycle rule (needs gcloud)
 ```
+
+`storage:lifecycle` is separate because a bucket lifecycle rule is a Cloud Storage
+setting, not a Firebase one — `firebase.json` has nowhere to put it, which is why
+`SPEC §10` assumed it for three milestones while nothing created it. It is what reclaims
+the audio a failed note deliberately keeps (`SPEC §4`), so it is not optional tidying.
 
 **Prefer the narrow ones.** `firebase deploy` releases hosting *after* functions, so a
 function that fails to create takes the hosting release down with it — the files upload,

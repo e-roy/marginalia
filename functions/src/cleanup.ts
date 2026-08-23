@@ -5,8 +5,7 @@ import { listLlmModels, pickLlmModel, polish, type SpeechConfig } from './speech
 import type { SettingsDoc } from './types';
 
 /**
- * Stages 2 and 3 of the cleanup pipeline (SPEC §7), and both of its mandatory
- * guardrails.
+ * Stage 2 of the cleanup pipeline (SPEC §7), and its mandatory guardrails.
  *
  * The single most important property of this module: **`runCleanup` cannot throw an
  * LLM error.** `transcribeNote` runs it inside the try block whose catch classifies
@@ -14,33 +13,29 @@ import type { SettingsDoc } from './types';
  * independently of STT and is asleep more often than not, so a polish failure reaching
  * that classifier would turn "the cleanup is unavailable" into "the transcript failed"
  * — the exact outcome SPEC §7 says must never happen. Every LLM failure is caught here
- * and answered with Stage 2 output and `llmModel: null`.
+ * and answered with `cleanText: null`, which the UI reads as "show the transcript".
  *
  * The callable in `repolishNote.ts` wants the opposite behaviour and gets it by reading
  * `llmModel`: swallowing the failure is right when the alternative is no note at all,
  * and wrong when the user explicitly asked and the alternative is the note they had.
+ *
+ * **The model sees `rawText`, verbatim.** There was once a deterministic filler strip
+ * in front of it, and it was a mistake — see ADR-016. Whatever a regex removes is
+ * removed from the model's evidence too, and it cannot ask for it back. Deciding what
+ * is a false start and what is emphasis is a judgement about meaning, which is the one
+ * thing the model has a system prompt for and a regex can never do.
  */
 
 /** `settings.llmModel === 'none'` means the user turned polish off (SPEC §6). */
 export const NO_POLISH = 'none';
 
 /**
- * Deliberately conservative, and deliberately not a judgement call — this runs offline
- * and must never depend on Ollama being awake. It does **not** strip `like`,
- * `you know`, `I mean`, `sort of` or `kind of`: those carry real meaning often enough
- * that removing them mechanically damages good sentences, so they are left to Stage 3,
- * which has the context to judge (SPEC §7).
+ * Models like to wrap JSON in a fence even when told to reply with JSON only.
  */
-const FILLERS = /\b(?:um+|uh+|erm?|ah+|mm+|hmm+)\b[,.]?\s*/gi;
-const REPEATS = /\b(\w+)(\s+\1\b)+/gi;
-
-export function stripFillers(raw: string): string {
-  return raw
-    .replace(FILLERS, '')
-    .replace(REPEATS, '$1')
-    .replace(/\s+([,.!?;:])/g, '$1')
-    .replace(/\s{2,}/g, ' ')
-    .trim();
+function unfence(text: string): string {
+  const trimmed = text.trim();
+  const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed);
+  return fenced?.[1] ?? trimmed;
 }
 
 /**
@@ -61,21 +56,14 @@ export function stripReasoning(text: string): string {
   return out.trim();
 }
 
-/** Models like to wrap JSON in a fence even when told to reply with JSON only. */
-function unfence(text: string): string {
-  const trimmed = text.trim();
-  const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed);
-  return fenced?.[1] ?? trimmed;
-}
-
 export interface Polished {
   text: string;
   title: string | null;
 }
 
 /**
- * Parse Stage 3's reply. Returns null for anything unusable, which the caller treats
- * exactly like the LLM being down — Stage 2 output survives either way.
+ * Parse the polish reply. Returns null for anything unusable, which the caller treats
+ * exactly like the LLM being down — the raw transcript survives either way.
  */
 export function parsePolish(content: string): Polished | null {
   const body = unfence(stripReasoning(content));
@@ -113,6 +101,11 @@ export function parsePolish(content: string): Polished | null {
  * oblivion is the most likely failure mode in the whole system, and it is invisible —
  * the result reads perfectly well, it is just no longer what was said (SPEC §7).
  *
+ * Measured against `rawText`, which is the only ground truth there is: it is what the
+ * speaker actually said, and the polish is only trustworthy insofar as it still says
+ * the same thing. The floor leaves room for genuine filler removal without leaving
+ * room for a summary.
+ *
  * An empty base rejects everything, which is why nothing offers to polish a recording
  * that caught only silence.
  */
@@ -126,9 +119,10 @@ export function withinLengthGate(input: string, output: string): boolean {
 }
 
 export interface CleanupResult {
-  cleanText: string;
+  /** Null whenever the polish did not happen — the UI then shows `rawText`. */
+  cleanText: string | null;
   title: string | null;
-  /** Null whenever Stage 3 did not contribute — disabled, unreachable, or rejected. */
+  /** Null whenever the polish did not contribute — disabled, unreachable, or rejected. */
   llmModel: string | null;
 }
 
@@ -137,14 +131,15 @@ export async function runCleanup(
   rawText: string,
   settings: SettingsDoc | null,
 ): Promise<CleanupResult> {
-  const stripped = stripFillers(rawText);
+  /**
+   * What every exit below returns. Not a degraded copy of the text — the note already
+   * has `rawText` and the UI falls back to it, so inventing a second nearly-identical
+   * string would only be a worse version of something already stored.
+   */
+  const unpolished: CleanupResult = { cleanText: null, title: null, llmModel: null };
 
-  // What we fall back to at every exit below. Stage 2 is offline and deterministic, so
-  // this much is always available.
-  const stage2: CleanupResult = { cleanText: stripped, title: null, llmModel: null };
-
-  if (stripped.length === 0) return stage2;
-  if (settings?.llmModel === NO_POLISH) return stage2;
+  if (rawText.trim().length === 0) return unpolished;
+  if (settings?.llmModel === NO_POLISH) return unpolished;
 
   try {
     let model = settings?.llmModel ?? null;
@@ -153,33 +148,33 @@ export async function runCleanup(
       // in this app (ADR-004): the server only serves its `PRELOAD_MODELS`.
       model = pickLlmModel(await listLlmModels(cfg));
       if (!model) {
-        logger.info('cleanup: no LLM model available, keeping Stage 2 text');
-        return stage2;
+        logger.info('cleanup: no LLM model available, keeping the transcript');
+        return unpolished;
       }
     }
 
-    const parsed = parsePolish(await polish(cfg, stripped, model));
+    const parsed = parsePolish(await polish(cfg, rawText, model));
     if (!parsed) {
       logger.warn('cleanup: polish reply was not usable JSON', { model });
-      return stage2;
+      return unpolished;
     }
 
-    if (!withinLengthGate(stripped, parsed.text)) {
+    if (!withinLengthGate(rawText, parsed.text)) {
       logger.warn('cleanup: polish rejected by the length gate', {
         model,
-        inputChars: stripped.length,
+        inputChars: rawText.length,
         outputChars: parsed.text.length,
       });
-      return stage2;
+      return unpolished;
     }
 
     return { cleanText: parsed.text, title: parsed.title, llmModel: model };
   } catch (err) {
     // Every LLM failure ends here. Polish is best-effort by construction, not by the
     // caller remembering to catch — see this module's header.
-    logger.warn('cleanup: polish unavailable, keeping Stage 2 text', {
+    logger.warn('cleanup: polish unavailable, keeping the transcript', {
       detail: toLogDetail(err),
     });
-    return stage2;
+    return unpolished;
   }
 }

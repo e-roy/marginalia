@@ -38,6 +38,37 @@ export function useLiveNotes(uid: string | null): NoteWithId[] {
 }
 
 /**
+ * Every note that gave up, live.
+ *
+ * Deliberately its own subscription rather than a filter over `useLiveNotes`. That feed
+ * is capped at the newest 50, which is right for it — anything still in flight is by
+ * definition recent — and wrong here: a note that gave up is precisely the one you come
+ * back to days later, and it would drop silently out of the count once fifty newer notes
+ * existed. A count that quietly stops counting is worse than no count.
+ *
+ * No `limit`, and that is a decision rather than an omission: a truncated count of
+ * failures is meaningless, and if this ever returns enough documents to matter then the
+ * resilience it reports is what has failed, not the query. Firestore serves the single
+ * equality filter from its automatic index, so there is no composite index behind this.
+ */
+export function useFailedNotes(uid: string | null): NoteWithId[] {
+  const [failed, setFailed] = useState<NoteWithId[]>([])
+
+  useEffect(() => {
+    if (!uid) return
+    return onSnapshot(
+      query(notesCollection(uid), where('status', '==', 'failed')),
+      (snapshot) => {
+        setFailed(snapshot.docs.map((entry) => ({ id: entry.id, ...(entry.data() as Note) })))
+      },
+      (err) => console.error('[marginalia] failed-notes subscription failed', err),
+    )
+  }, [uid])
+
+  return uid ? failed : []
+}
+
+/**
  * Every book, in one subscription, sorted on the client.
  *
  * A reader has tens of books — the whole shelf is a few kilobytes, and holding it in
