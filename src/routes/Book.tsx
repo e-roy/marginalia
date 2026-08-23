@@ -1,14 +1,26 @@
-import { ChevronLeft, Mic } from 'lucide-react'
-import { useMemo } from 'react'
+import { ChevronLeft, Loader2, Mic, Trash2 } from 'lucide-react'
+import { useMemo, useState } from 'react'
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom'
+import { toast } from 'sonner'
 
 import { BookCover } from '@/components/BookCover'
 import { ChapterNotes } from '@/components/ChapterNotes'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useBook, useBookNotes, useBooks } from '@/hooks/useLibrary'
-import { updateBook } from '@/lib/books'
+import { deleteBook, updateBook } from '@/lib/books'
 import type { Book as BookDoc, NoteWithId } from '@/lib/types'
 import { useAuth } from '@/stores/auth'
 import { useLibrary } from '@/stores/library'
@@ -33,6 +45,19 @@ function groupByChapter(notes: NoteWithId[]): { chapter: number | null; notes: N
   return [...groups.entries()].map(([chapter, chapterNotes]) => ({ chapter, notes: chapterNotes }))
 }
 
+/**
+ * `deleteBook` reads the server before it deletes anything, so a missing connection is
+ * the one failure worth naming: nothing changed, and trying again on a signal will work.
+ * `navigator.onLine` is deliberately not consulted — it reports link state rather than
+ * whether Firestore is actually reachable.
+ */
+function deleteMessage(err: unknown): string {
+  if ((err as { code?: unknown } | null)?.code === 'unavailable') {
+    return 'No connection. A book can only be deleted online, so nothing was changed.'
+  }
+  return 'Could not delete this book.'
+}
+
 export function Book() {
   const { bookId = null } = useParams()
   const uid = useAuth((s) => s.user?.uid ?? null)
@@ -40,16 +65,57 @@ export function Book() {
   const book = useBook(books, bookId)
   const notes = useBookNotes(uid, bookId)
   const select = useLibrary((s) => s.select)
+  const selectedBookId = useLibrary((s) => s.selectedBookId)
   const navigate = useNavigate()
+
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [deleted, setDeleted] = useState(false)
 
   const groups = useMemo(() => groupByChapter(notes), [notes])
 
   if (!uid) return <Navigate to="/" replace />
 
+  // Above the `!book` guard, and the ordering is the whole point. Deleting your only book
+  // leaves `books.length === 0`, which the guard below reads as "still loading" and
+  // answers with `null` — a blank screen that never resolves, because no book is ever
+  // coming.
+  if (deleted) return <Navigate to="/books" replace />
+
   // The books subscription has to deliver before we can tell "still loading" from
   // "no such book", so an empty shelf is treated as the former.
   if (!book) {
     return books.length === 0 ? null : <Navigate to="/books" replace />
+  }
+
+  /**
+   * The count is the only safety net here — there is no undo — so the confirmation spends
+   * its words on it. `> 0` rather than `!== 0` because `forgetNoteOnBook` decrements
+   * without a floor, and a drifted counter must not offer to delete "-1 notes".
+   */
+  const cost =
+    book.noteCount > 0
+      ? `“${book.title}” and its ${book.noteCount} note${book.noteCount === 1 ? '' : 's'} will be permanently deleted.`
+      : `“${book.title}” will be permanently deleted.`
+
+  const remove = async () => {
+    setDeleting(true)
+    try {
+      await deleteBook(uid, book.id, () => {
+        // Fired after the server read and before the first batch lands, so we leave the
+        // screen ahead of the book disappearing out from under it — which is also what
+        // keeps the dialog from being unmounted mid-write.
+        if (selectedBookId === book.id) select(null)
+        setDeleted(true)
+      })
+      toast.success('Book deleted.')
+    } catch (err) {
+      // Still on this screen with the dialog open: everything that can throw happens
+      // before the callback, so nothing has been deleted and trying again is safe.
+      console.error('[marginalia] delete book failed', err)
+      toast.error(deleteMessage(err))
+      setDeleting(false)
+    }
   }
 
   return (
@@ -149,6 +215,58 @@ export function Book() {
           ))}
         </div>
       )}
+
+      {/* `Delete book` rather than `Delete`, because this sits directly below the book's
+          notes and the bare word reads as acting on one of them. */}
+      <AlertDialog
+        open={confirmOpen}
+        onOpenChange={(next) => {
+          // A delete in flight owns the dialog until it resolves. Cancel is already gone
+          // by then, but Escape would otherwise pull the loading state out from under it.
+          if (deleting) return
+          setConfirmOpen(next)
+        }}
+      >
+        <AlertDialogTrigger asChild>
+          <Button variant="ghost" size="sm" className="text-muted-foreground mt-auto self-start">
+            <Trash2 className="h-3.5 w-3.5" />
+            Delete book
+          </Button>
+        </AlertDialogTrigger>
+
+        <AlertDialogContent onEscapeKeyDown={(event) => deleting && event.preventDefault()}>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this book?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {cost} This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            {/* Withdrawn once the write starts — there is nothing left to cancel, and a
+                dead-but-visible button is worse than none. */}
+            {deleting ? null : <AlertDialogCancel>Keep it</AlertDialogCancel>}
+            <AlertDialogAction
+              variant="destructive"
+              disabled={deleting}
+              // Radix closes on Action by default. The dialog has to stay up and show the
+              // work instead, because the server read it is waiting on can still fail.
+              onClick={(event) => {
+                event.preventDefault()
+                void remove()
+              }}
+            >
+              {deleting ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Deleting…
+                </>
+              ) : (
+                'Delete'
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

@@ -12,6 +12,11 @@ import { SignIn } from '@/routes/SignIn'
 import { initKeyboardInset } from '@/lib/keyboard'
 import { useAuth } from '@/stores/auth'
 
+/** Shared so the desktop and mobile offsets cannot drift apart. See the `Toaster` below. */
+const TOAST_OFFSET = {
+  bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--keyboard-inset, 0px) + 1rem)',
+}
+
 /**
  * The only lazy route in the app, and the reason `Suspense` is here at all. The barcode
  * decoder is the largest dependency in the bundle and `SPEC §9` requires it never reach
@@ -46,7 +51,17 @@ export default function App() {
   return (
     <>
       <AutoUpdate />
-      <Toaster position="top-center" />
+      {/* Bottom, because on a phone the top of the screen is the furthest thing from
+          your eyes and your thumb — a toast up there is read late or not at all.
+
+          The offset is not decoration. The toaster is `position: fixed`, so it is placed
+          against the viewport and does not inherit the safe-area padding `body` carries
+          (`index.css`) — without the inset it would sit under the home indicator. The
+          keyboard term is the same problem the bottom sheets solve: iOS overlays the
+          keyboard rather than shrinking the viewport, so a toast fired while typing a
+          note would land behind it. `--keyboard-inset` is maintained on the document
+          element by `initKeyboardInset()` and falls back to 0px everywhere else. */}
+      <Toaster position="bottom-center" offset={TOAST_OFFSET} mobileOffset={TOAST_OFFSET} />
       {pending ? (
         <Splash />
       ) : status === 'signed-out' ? (
