@@ -109,10 +109,10 @@ export function Settings() {
 
         <ModelPicker
           label="Cleanup"
-          hint="Auto picks the first model the server lists. Off keeps the filler strip and skips the polish entirely."
+          hint="Auto picks the first model the server lists. Off keeps the transcript exactly as dictated."
           value={settings?.llmModel ?? null}
           available={health?.llm ?? []}
-          offLabel="Off — filler strip only"
+          offLabel="Off — keep the raw transcript"
           onChange={(value) => void setLlmModel(uid, value)}
         />
 

@@ -9,5 +9,6 @@ initializeApp();
 setGlobalOptions({ region: REGION, maxInstances: 10 });
 
 export { repolishNote } from './repolishNote';
+export { retrySweep } from './retrySweep';
 export { serverHealth } from './serverHealth';
 export { transcribeNote } from './transcribeNote';

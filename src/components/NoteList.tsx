@@ -15,8 +15,20 @@ const PENDING_LABELS: Record<Exclude<NoteStatus, 'done' | 'failed'>, string> = {
   transcribing: 'Transcribing…',
 }
 
-/** Exported because the Note screen shows the same states for the same reasons. */
-export function StatusLine({ note }: { note: NoteWithId }) {
+/**
+ * Exported because the Note screen shows the same states for the same reasons.
+ *
+ * `withActions` is set there and only there: that screen renders Try again directly
+ * below this line, so pointing at a button the reader can already see would be noise.
+ * In the feed there is no button, so the line has to say where to find one.
+ */
+export function StatusLine({
+  note,
+  withActions = false,
+}: {
+  note: NoteWithId
+  withActions?: boolean
+}) {
   // A finished note with nothing in it means Whisper heard no speech — a pocket
   // recording, or a tap that caught silence. Saying so beats an empty row.
   if (note.status === 'done') {
@@ -26,11 +38,32 @@ export function StatusLine({ note }: { note: NoteWithId }) {
   // A retry keeps the previous attempt's error until it succeeds, so while the
   // function is actively working, "Transcribing…" is the truer thing to show.
   if (note.status === 'failed' || (note.error && note.status !== 'transcribing')) {
+    /**
+     * What happens next, which the error itself deliberately does not say.
+     *
+     * The same code means three different futures depending on where the note is. Still
+     * `pending` — the sweep will come back to it. `failed` with its audio — it gave up,
+     * and Try again on the Note screen will put it back in the queue. `failed` without
+     * — the recording is gone (rejected outright, or reclaimed by the bucket lifecycle
+     * rule) and nothing can bring the transcript back.
+     */
+    const outcome =
+      note.status !== 'failed'
+        ? ' This will retry on its own.'
+        : note.audioPath !== null
+          ? withActions
+            ? ''
+            : ' Open the note and tap Try again.'
+          : ' The recording is no longer available.'
+
     return (
       <p className="text-destructive flex items-start gap-1.5 text-sm">
         <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
         {/* Sanitized server-side — never a raw fetch error, never a hostname. */}
-        <span>{note.error?.message ?? 'Transcription failed.'}</span>
+        <span>
+          {note.error?.message ?? 'Transcription failed.'}
+          <span className="text-muted-foreground">{outcome}</span>
+        </span>
       </p>
     )
   }

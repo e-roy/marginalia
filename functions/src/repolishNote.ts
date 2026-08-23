@@ -13,14 +13,14 @@ import type { NoteDoc, SettingsDoc } from './types';
  *
  * Two things this is for: a note captured while Ollama was asleep, and a note you want
  * run through a different model after changing the pick in Settings. Neither needs the
- * audio — `rawText` is kept verbatim and never overwritten, so Stage 3 can be re-run
+ * audio — `rawText` is kept verbatim and never overwritten, so Stage 2 can be re-run
  * long after the recording itself was deleted.
  *
  * **This is the one caller that does not want `runCleanup`'s best-effort behaviour.**
  * Swallowing a polish failure is right on the automatic path, where the alternative is
  * losing a transcript. It is wrong here: the user asked, so a failure that silently
- * wrote Stage 2 output over an existing polish would answer their tap by making the
- * note worse. So nothing is written unless Stage 3 actually produced text.
+ * blanked an existing polish would answer their tap by making the note worse, so
+ * nothing is written unless the polish actually produced text.
  */
 
 interface RepolishResult {
@@ -124,7 +124,7 @@ export const repolishNote = onCall(
 
     const cleanup = await runCleanup(cfg, rawText, settings);
 
-    if (cleanup.llmModel === null) {
+    if (cleanup.llmModel === null || cleanup.cleanText === null) {
       // Nothing is written. The note keeps whatever it already had.
       logger.warn('repolishNote: no polish produced, note left untouched', { uid, noteId });
       throw unavailable();

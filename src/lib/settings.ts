@@ -18,7 +18,7 @@ export function setSttModel(uid: string, model: string | null): Promise<void> {
   return setDoc(settingsRef(uid), { sttModel: model }, { merge: true })
 }
 
-/** Null means auto-pick; `'none'` turns Stage 3 off entirely (SPEC §6). */
+/** Null means auto-pick; `'none'` turns the polish off entirely (SPEC §6). */
 export function setLlmModel(uid: string, model: string | null): Promise<void> {
   return setDoc(settingsRef(uid), { llmModel: model }, { merge: true })
 }

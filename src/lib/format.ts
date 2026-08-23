@@ -26,6 +26,22 @@ export function formatClockTime(value: Timestamp | null): string {
   })
 }
 
+/**
+ * `4m` / `30s` — how long until a queued retry is due.
+ *
+ * Coarse on purpose. This is a reassurance that something is scheduled, not a
+ * countdown worth watching, and the sweep runs on a five-minute tick anyway so
+ * second-level precision would be false. Returns null once the time has passed, which
+ * the caller reads as "any moment now".
+ */
+export function formatCountdown(value: Timestamp | null, nowMs = Date.now()): string | null {
+  if (!value) return null
+  const ms = value.toMillis() - nowMs
+  if (ms <= 0) return null
+  if (ms < 60_000) return `${Math.max(1, Math.round(ms / 1000))}s`
+  return `${Math.round(ms / 60_000)}m`
+}
+
 export function isToday(value: Timestamp | null): boolean {
   if (!value) return true // an unacked write is, by definition, from just now
   const date = value.toDate()

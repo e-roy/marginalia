@@ -18,7 +18,8 @@
     "deploy:web": "node scripts/deploy.mjs --only hosting",
     "deploy:fn": "node scripts/deploy.mjs --only functions",
     "deploy:rules": "node scripts/deploy.mjs --only firestore,storage",
-    "deploy:check": "node scripts/deploy.mjs --dry-run"
+    "deploy:check": "node scripts/deploy.mjs --dry-run",
+    "storage:lifecycle": "node scripts/storage-lifecycle.mjs"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.3.0",

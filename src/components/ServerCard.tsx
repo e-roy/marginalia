@@ -65,13 +65,20 @@ export function ServerCard({ cached = null }: { cached?: ServerHealth | null }) 
         <div className="flex flex-col gap-2 text-sm">
           <div className="flex flex-wrap gap-2">
             <Badge variant={health.ok ? 'default' : 'destructive'}>
-              STT {health.ok ? 'up' : 'down'}
+              Transcription {health.ok ? 'up' : 'down'}
             </Badge>
             {/* Ollama fails independently of STT, so this is its own verdict. */}
-            <Badge variant={health.llmOk ? 'secondary' : 'outline'}>
-              LLM {health.llmOk ? 'up' : 'down'}
-            </Badge>
+            <CleanupBadge health={health} />
           </div>
+
+          {/* The finding worth a sentence: a model can be listed and still refuse. */}
+          {health.llmOk && !health.llmUsable && health.llmProbed ? (
+            <p className="text-muted-foreground text-xs">
+              <span className="font-mono">{health.llmProbed}</span> is listed but did not
+              answer, so notes will keep their raw transcript. Pick a different cleanup
+              model below.
+            </p>
+          ) : null}
 
           <ModelList label="Transcription" ids={health.stt} />
           <ModelList label="Cleanup" ids={health.llm} />
@@ -79,6 +86,21 @@ export function ServerCard({ cached = null }: { cached?: ServerHealth | null }) 
       ) : null}
     </div>
   )
+}
+
+/**
+ * Three states, not two, because M4 proved two were a lie.
+ *
+ * `llmOk` only ever meant "the model list came back". A green badge on the strength of
+ * that told you cleanup would work at a moment when it demonstrably would not — the
+ * auto-picked model was listed instantly and then never answered. `llmUsable` is the
+ * one that was actually tested, so it is the one that decides the badge.
+ */
+function CleanupBadge({ health }: { health: ServerHealth }) {
+  if (!health.llmOk) return <Badge variant="outline">Cleanup down</Badge>
+  if (health.llmUsable) return <Badge variant="secondary">Cleanup up</Badge>
+  // Listed but silent. Not "down" — the server answered, the model didn't.
+  return <Badge variant="outline">Cleanup not answering</Badge>
 }
 
 function ModelList({ label, ids }: { label: string; ids: string[] }) {

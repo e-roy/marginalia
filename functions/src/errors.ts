@@ -14,6 +14,7 @@ export type SpeechErrorCode =
   | 'no_stt_model' // discovery returned nothing usable
   | 'audio_missing' // the Storage object vanished before it could be read
   | 'audio_too_large'
+  | 'run_interrupted' // the run was killed before it could record a verdict
   | 'internal';
 
 export class SpeechError extends Error {
@@ -49,18 +50,44 @@ export function toLogDetail(err: unknown): string {
  * strings are written to Firestore and rendered in the UI.
  */
 const MESSAGES: Record<SpeechErrorCode, string> = {
-  stt_unavailable: 'The speech server could not be reached. This will retry on its own.',
-  stt_timeout: 'Transcription took too long. This will retry on its own.',
+  /**
+   * These two used to end "This will retry on its own", which was true when `pending`
+   * was the only state that carried them. Since M6 a note can hold the same error
+   * having *given up*, where the sentence is a straight lie — nothing will retry it
+   * until someone taps Try again. What happens next depends on the note's status, and
+   * the status is something only the UI has in hand, so `StatusLine` says it and these
+   * stick to what went wrong.
+   */
+  stt_unavailable: 'The speech server could not be reached.',
+  stt_timeout: 'Transcription took too long.',
   stt_rejected: 'The speech server rejected this recording.',
   llm_unavailable: 'Cleanup is unavailable, so the raw transcript was kept.',
   no_stt_model: 'No transcription model is available on the server.',
   audio_missing: 'The recording was no longer available to transcribe.',
   audio_too_large: 'That recording is too long to transcribe.',
+  /**
+   * Written only by `retrySweep`, for the note whose runs kept being cut short before
+   * anything could classify them. Deliberately not "transcription failed" — nothing
+   * rejected this recording, and the recording is still there, so the honest thing is
+   * to say what happened and point at the button that does something about it.
+   */
+  run_interrupted: 'Transcribing this note kept being cut short. Tap Try again.',
   internal: 'Something went wrong while transcribing.',
 };
 
 /** The `{ code, message }` pair written to `note.error`. Sanitized by construction. */
 export function toClientError(err: unknown): { code: SpeechErrorCode; message: string } {
-  const code = toErrorCode(err);
+  return clientErrorFor(toErrorCode(err));
+}
+
+/**
+ * The same pair, for a caller that already knows the code and has no error to narrow —
+ * `retrySweep` writing `run_interrupted` on a note whose runs kept being killed, where
+ * there is no exception because nothing survived to throw one.
+ */
+export function clientErrorFor(code: SpeechErrorCode): {
+  code: SpeechErrorCode;
+  message: string;
+} {
   return { code, message: MESSAGES[code] };
 }
