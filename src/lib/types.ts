@@ -56,6 +56,29 @@ export interface Book {
   isbn13: string | null
   status: 'reading' | 'finished' | 'shelved'
 
+  /**
+   * What the ISBN lookup returns beyond title, author and cover (`SPEC §6`, `SPEC §9`).
+   *
+   * **Every one of these is absent on books created before 2026-08-24**, because a Firestore
+   * document is whatever was written to it. `toBook` in `@/lib/books` is what makes the
+   * types above honest — read books through it, never through a bare `as Book` cast, or
+   * `subjects.map` on an older book throws.
+   */
+  subtitle: string | null
+  /**
+   * The scan path parses this out of Open Library's `publish_date`, which describes **this
+   * edition**; the search path would take `first_publish_year`, which describes **the
+   * work**. One field, two meanings — a reader wants a year on the screen rather than a
+   * bibliographic distinction. `BookCandidate.firstPublishYear` keeps the other name for
+   * the same reason, and the difference is why they are not called the same thing.
+   */
+  publishYear: number | null
+  pageCount: number | null
+  /** First publisher only, where `authors` keeps all of them — see `lookupIsbn`. */
+  publisher: string | null
+  /** Filtered and capped at eight by `subjectsOf`; the raw list runs to 30-odd. */
+  subjects: string[]
+
   /** Chapter numbers ARE the identity — no chapter documents anywhere. */
   chapterTitles: Record<string, string>
   currentChapter: number | null // per-book resume point; null = Unfiled

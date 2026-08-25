@@ -1,10 +1,10 @@
 import { limit, onSnapshot, orderBy, query, where } from 'firebase/firestore'
 import { useEffect, useMemo, useState } from 'react'
 
-import { booksCollection } from '@/lib/books'
+import { booksCollection, toBook } from '@/lib/books'
 import { noteRef, notesCollection } from '@/lib/notes'
 import { settingsRef } from '@/lib/settings'
-import type { Book, BookWithId, Note, NoteWithId, Settings } from '@/lib/types'
+import type { BookWithId, Note, NoteWithId, Settings } from '@/lib/types'
 
 /**
  * Live subscriptions. These are the reason the app never blocks on the network: a note
@@ -122,7 +122,9 @@ export function useBooks(uid: string | null): BookWithId[] {
     return onSnapshot(
       booksCollection(uid),
       (snapshot) => {
-        setBooks(snapshot.docs.map((entry) => ({ id: entry.id, ...(entry.data() as Book) })))
+        // `toBook`, not a bare cast: books written before the metadata fields existed lack
+        // them entirely, and `subjects` in particular is read with `.map`.
+        setBooks(snapshot.docs.map((entry) => toBook(entry.id, entry.data())))
       },
       (err) => console.error('[marginalia] books subscription failed', err),
     )

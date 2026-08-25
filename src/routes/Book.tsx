@@ -175,47 +175,31 @@ export function Book() {
         <h1 className="line-clamp-1 flex-1 font-semibold">{book.title}</h1>
       </header>
 
+      {/*
+        Identity as plain text, not as inputs.
+
+        Until 2026-08-25 the title and author were live text fields here, and the metadata
+        the scanner brings back joined them. Eric's objection on the day that shipped is the
+        right one: a live field above the notes you came to read is a mis-tap away from
+        rewriting a title the scanner got right. `SPEC §9` wants a correction to be
+        *reachable* — it does not want every field *armed*. Corrections moved to
+        `/books/:id/details`, behind an explicit Edit.
+      */}
       <div className="flex gap-4">
         <BookCover title={book.title} coverUrl={book.coverUrl} className="w-20 shrink-0" />
 
-        <div className="flex min-w-0 flex-1 flex-col gap-2">
-          {/* Metadata is frequently wrong (SPEC §9), so it stays editable forever —
-              uncontrolled, so a keystroke never races the Firestore snapshot. */}
-          <Input
-            key={`${book.id}-title`}
-            defaultValue={book.title}
-            onBlur={(event) => {
-              const value = event.target.value.trim()
-              if (value && value !== book.title) void updateBook(uid, book.id, { title: value })
-            }}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') event.currentTarget.blur()
-            }}
-            aria-label="Book title"
-            className="h-9 font-medium"
-          />
-          <Input
-            key={`${book.id}-authors`}
-            defaultValue={book.authors.join(', ')}
-            onBlur={(event) => {
-              const authors = event.target.value
-                .split(',')
-                .map((name) => name.trim())
-                .filter((name) => name.length > 0)
-              if (authors.join(', ') !== book.authors.join(', ')) {
-                void updateBook(uid, book.id, { authors })
-              }
-            }}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') event.currentTarget.blur()
-            }}
-            placeholder="Author"
-            aria-label="Author"
-            className="h-9 text-sm"
-          />
+        <div className="flex min-w-0 flex-1 flex-col justify-center gap-1">
+          <p className="font-medium">{book.title}</p>
+          {book.subtitle ? (
+            <p className="text-muted-foreground text-sm">{book.subtitle}</p>
+          ) : null}
+          <p className="text-muted-foreground text-sm">{book.authors.join(', ') || 'Unknown author'}</p>
           <p className="text-muted-foreground text-xs">
             {book.noteCount} note{book.noteCount === 1 ? '' : 's'}
           </p>
+          <Button variant="link" asChild className="h-auto justify-start p-0 text-xs">
+            <Link to={`/books/${book.id}/details`}>Details and editing</Link>
+          </Button>
         </div>
       </div>
 

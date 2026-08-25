@@ -21,6 +21,15 @@ export interface ExportBook {
   title: string
   authors: string[]
   isbn13: string | null
+  /**
+   * Added 2026-08-24, extending the format ADR-020 fixed. Each is omitted when absent, so
+   * a book added by hand still produces exactly the frontmatter it did before.
+   */
+  subtitle: string | null
+  publishYear: number | null
+  pageCount: number | null
+  publisher: string | null
+  subjects: string[]
 }
 
 /**
@@ -115,8 +124,26 @@ export function bookMarkdown(book: ExportBook, notes: ExportNote[], exportedOn: 
   const frontmatter = [
     '---',
     `title: ${yamlString(book.title)}`,
+    ...(book.subtitle ? [`subtitle: ${yamlString(book.subtitle)}`] : []),
     ...(authors.length > 0 ? [`author: ${yamlString(authors)}`] : []),
     ...(book.isbn13 ? [`isbn: ${yamlString(book.isbn13)}`] : []),
+    ...(book.publisher ? [`publisher: ${yamlString(book.publisher)}`] : []),
+    // Bare numbers, so Obsidian types them as numbers rather than as text you cannot sort.
+    ...(book.publishYear === null ? [] : [`year: ${book.publishYear}`]),
+    ...(book.pageCount === null ? [] : [`pages: ${book.pageCount}`]),
+    /**
+     * A flow sequence of **quoted** scalars, unlike `tags` below.
+     *
+     * `tags: [book-notes]` is a fixed literal that is safe bare. A subject is arbitrary
+     * text off Open Library, and the live data contains commas inside single subjects —
+     * `77.32 intelligence, creativity` — which a bare flow sequence would silently split
+     * into two entries. A colon or a quote would be worse: ADR-020 records that Obsidian
+     * discards the *whole* frontmatter block when any line is malformed, so the cost of
+     * getting this wrong is every property on the file.
+     */
+    ...(book.subjects.length > 0
+      ? [`subjects: [${book.subjects.map(yamlString).join(', ')}]`]
+      : []),
     // Not quoted, matching the spec: a flow sequence and a bare ISO date are both valid
     // YAML unquoted, and Obsidian renders the first as a real tag list only in that form.
     'tags: [book-notes]',

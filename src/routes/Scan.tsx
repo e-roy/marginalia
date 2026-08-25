@@ -1,11 +1,12 @@
 import { BrowserCodeReader, BrowserMultiFormatOneDReader } from '@zxing/browser'
 import { BarcodeFormat, DecodeHintType } from '@zxing/library'
-import { ChevronLeft, Loader2 } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { ChevronLeft, Keyboard, Loader2 } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 
 import type { Draft } from '@/components/AddBookSheet'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { cameraMessage } from '@/lib/camera'
 import { isValidIsbn13, normalizeIsbn13 } from '@/lib/isbn'
 import { lookupIsbn } from '@/lib/openLibrary'
@@ -31,6 +32,13 @@ type Phase =
   | { kind: 'scanning' }
   | { kind: 'looking-up' }
   | { kind: 'blocked'; message: string }
+  /**
+   * Typing the number printed under the barcode. Reachable from `scanning` — some books
+   * simply will not decode — and from `blocked`, which is the state where a decode is
+   * impossible by construction and where the only previous option was to give up and go
+   * looking for the book by title.
+   */
+  | { kind: 'manual' }
 
 interface ScanLocationState {
   returnTo?: string
@@ -43,6 +51,10 @@ export function Scan() {
 
   const videoRef = useRef<HTMLVideoElement>(null)
   const [phase, setPhase] = useState<Phase>({ kind: 'starting' })
+
+  /** Local to this screen and to this attempt — nothing else has any use for either. */
+  const [typedIsbn, setTypedIsbn] = useState('')
+  const [typedError, setTypedError] = useState<string | null>(null)
 
   /**
    * Live scanner state kept outside React, for the same reason `capture.ts` keeps the
@@ -111,6 +123,11 @@ export function Scan() {
         coverUrl: found?.coverUrl ?? null,
         openLibraryKey: found?.openLibraryKey ?? null,
         isbn13,
+        subtitle: found?.subtitle ?? null,
+        publishYear: found?.firstPublishYear ?? null,
+        pageCount: found?.pageCount ?? null,
+        publisher: found?.publisher ?? null,
+        subjects: found?.subjects ?? [],
       }
 
       // `replace` so the scanner is not left in history: a back-swipe out of the
@@ -124,6 +141,38 @@ export function Scan() {
     const video = videoRef.current
     if (!video || controlsRef.current) return
 
+    /**
+     * **`TRY_HARDER` was tried here on 2026-08-24 and reverted the same day. Do not put it
+     * back without hand-driving the decode loop first.**
+     *
+     * The headless benchmark (`scripts/decode-bench.mjs`) liked it a lot: it won or tied 26
+     * cells to 7, and it took a vertically-held book from a 0% decode rate to 100%, which is
+     * a capability rather than a tuning gain. On a real iPhone it made the viewfinder go
+     * **black** — the camera flashes once and the page never paints again.
+     *
+     * The benchmark could not see it, and the reason is worth keeping. `TRY_HARDER` does two
+     * things in `OneDReader`: `maxLines` goes from a fixed 25 rows to the whole frame (~360
+     * rows at 720p, doubled for the reversed pass), and `decode` gains a rotated-90° retry
+     * that runs that entire scan a second time. The retry calls
+     * `HTMLCanvasElementLuminanceSource.rotateCounterClockwise()`, which is **not** an array
+     * transpose: it resizes a temp canvas, does a rotated `drawImage`, then re-runs
+     * `getImageData` over the whole frame and rebuilds the greyscale buffer. Two full-frame
+     * GPU readbacks and ~14× the row work, on every failed attempt — which is every attempt
+     * while someone is still lining the barcode up.
+     *
+     * The benchmark substituted a cheap typed-array transpose for that call, so its timings
+     * were optimistic in precisely the path that mattered. Desktop Node said 40-100 ms; the
+     * phone said "black screen". That gap is the lesson, not the hint.
+     *
+     * **No resolution is requested either, and that one is a measured decision that stands.**
+     * Raising the stream to 1280 or 1920 did not help, and under low light with sensor grain
+     * it made things markedly worse: `HybridBinarizer` thresholds on 8×8 blocks, so once a
+     * module is ~12 px wide a block sits inside a single bar with no dynamic range to work
+     * with. Cropping to the guide box is the lever that would help — it raises px/module
+     * while *lowering* the pixel count, and it is also what would make `TRY_HARDER`
+     * affordable — but it needs the decode loop hand-driven, which ADR-014's camera
+     * lifecycle makes a separate piece of work.
+     */
     const hints = new Map([[DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.EAN_13]]])
     const reader = new BrowserMultiFormatOneDReader(hints, {
       delayBetweenScanAttempts: SCAN_ATTEMPT_INTERVAL_MS,
@@ -162,6 +211,50 @@ export function Scan() {
       toPhase({ kind: 'blocked', message: cameraMessage(err) })
     }
   }, [onDecoded, toPhase])
+
+  /**
+   * The camera goes off on the way in. The software keyboard covers the viewfinder anyway,
+   * and leaving the sensor live behind a form is the same waste `teardown` exists to
+   * prevent — with the iOS camera indicator lit the whole time someone types thirteen
+   * digits.
+   */
+  const openManual = useCallback(() => {
+    teardown()
+    setTypedError(null)
+    toPhase({ kind: 'manual' })
+  }, [teardown, toPhase])
+
+  /**
+   * And back out again. `start()` decides what "back" actually means: it succeeds and we
+   * are scanning, or it fails and `cameraMessage` puts us right back in `blocked`. That
+   * matters because manual entry is reachable *from* `blocked` — where the camera was
+   * denied — and there is no camera to return to. Re-deriving the state is honest where
+   * remembering the previous one would promise a viewfinder that cannot exist.
+   */
+  const closeManual = useCallback(() => {
+    toPhase({ kind: 'starting' })
+    void start()
+  }, [start, toPhase])
+
+  const submitManual = useCallback(
+    (event: FormEvent) => {
+      event.preventDefault()
+      const isbn13 = normalizeIsbn13(typedIsbn)
+
+      // A misread from the camera is rejected silently, because the person is still
+      // bringing the barcode into frame and an error would be noise. A number someone
+      // deliberately typed is the opposite case: saying nothing reads as a broken button.
+      if (!isValidIsbn13(isbn13)) {
+        setTypedError(
+          "That isn't a book ISBN. It's the 13 digits under the barcode, usually starting 978.",
+        )
+        return
+      }
+
+      void onDecoded(isbn13)
+    },
+    [onDecoded, typedIsbn],
+  )
 
   useEffect(() => {
     mountedRef.current = true
@@ -212,15 +305,14 @@ export function Scan() {
         <h1 className="text-lg font-semibold">Scan a barcode</h1>
       </header>
 
-      {phase.kind === 'blocked' ? (
-        <div className="flex flex-1 flex-col items-center justify-center gap-4 px-8 text-center">
-          <p className="text-muted-foreground text-sm">{phase.message}</p>
-          <Button variant="outline" onClick={() => void navigate(returnTo)}>
-            Add the book by hand
-          </Button>
-        </div>
-      ) : (
-        <div className="relative flex-1 overflow-hidden bg-black">
+      {/*
+          The viewfinder is mounted in **every** phase, and that is load-bearing rather than
+          tidy. `start()` early-returns on `!videoRef.current`, so a `blocked` branch that
+          rendered its own subtree left no `<video>` to come back to — and manual entry is
+          reachable from `blocked`. Overlaying the states on one persistent element means
+          "back" is a plain `start()` call with nothing to remount first.
+        */}
+      <div className="relative flex-1 overflow-hidden bg-black">
           {/*
             `playsInline` is the one attribute this screen cannot do without: iOS Safari
             otherwise hoists the stream into its native fullscreen player and the
@@ -244,26 +336,101 @@ export function Scan() {
             className="absolute inset-0 h-full w-full object-cover"
           />
 
-          {/* The guide box. Book barcodes are wide, so this is a letterbox rather than
-              a square — it tells you how far away to hold the phone. */}
-          <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-            <div className="h-28 w-[78%] rounded-lg border-2 border-white/80 shadow-[0_0_0_100vmax_rgba(0,0,0,0.45)]" />
-          </div>
+          {phase.kind === 'blocked' ? (
+            <div className="bg-background absolute inset-0 flex flex-col items-center justify-center gap-4 px-8 text-center">
+              <p className="text-muted-foreground text-sm">{phase.message}</p>
+              {/* First, not second: the book is in your hands and its number is printed on
+                  the back, so typing it is a better answer than going to look for the title
+                  — and this is the one state where no amount of aiming will ever work. */}
+              <Button variant="outline" onClick={openManual}>
+                <Keyboard className="h-4 w-4" />
+                Type the ISBN instead
+              </Button>
+              <Button variant="ghost" onClick={() => void navigate(returnTo)}>
+                Add the book by hand
+              </Button>
+            </div>
+          ) : phase.kind === 'manual' ? (
+            // Anchored to the top rather than centred: iOS overlays the software keyboard
+            // on the layout viewport instead of shrinking it, so a vertically centred form
+            // is a form behind the keyboard.
+            <div className="bg-background absolute inset-0 flex flex-col justify-start px-6 pt-6">
+              <form onSubmit={submitManual} className="flex flex-col gap-3">
+                <label htmlFor="manual-isbn" className="text-sm font-medium">
+                  ISBN
+                </label>
+                <Input
+                  id="manual-isbn"
+                  name="manual-isbn"
+                  autoFocus
+                  inputMode="numeric"
+                  autoComplete="off"
+                  value={typedIsbn}
+                  onChange={(event) => {
+                    setTypedIsbn(event.target.value)
+                    setTypedError(null)
+                  }}
+                  placeholder="978…"
+                  className="h-11 font-mono text-base"
+                />
+                <p className="text-muted-foreground text-xs">
+                  The thirteen digits printed under the barcode. Spaces and hyphens are fine.
+                </p>
+                {typedError ? <p className="text-destructive text-sm">{typedError}</p> : null}
 
-          <p className="absolute inset-x-0 bottom-8 text-center text-sm text-white/90">
-            {phase.kind === 'looking-up' ? (
-              <span className="inline-flex items-center gap-2">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Looking it up…
-              </span>
-            ) : phase.kind === 'starting' ? (
-              'Starting the camera…'
-            ) : (
-              'Point the camera at the barcode on the back'
-            )}
-          </p>
-        </div>
-      )}
+                <div className="flex gap-2">
+                  <Button type="button" variant="ghost" onClick={closeManual} className="flex-1">
+                    Back
+                  </Button>
+                  <Button
+                    type="submit"
+                    disabled={typedIsbn.trim().length === 0}
+                    className="flex-1"
+                  >
+                    Look it up
+                  </Button>
+                </div>
+              </form>
+            </div>
+          ) : (
+            <>
+              {/* The guide box. Book barcodes are wide, so this is a letterbox rather than
+                  a square — it tells you how far away to hold the phone. */}
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                <div className="h-28 w-[78%] rounded-lg border-2 border-white/80 shadow-[0_0_0_100vmax_rgba(0,0,0,0.45)]" />
+              </div>
+
+              <p className="absolute inset-x-0 bottom-20 text-center text-sm text-white/90">
+                {phase.kind === 'looking-up' ? (
+                  <span className="inline-flex items-center gap-2">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Looking it up…
+                  </span>
+                ) : phase.kind === 'starting' ? (
+                  'Starting the camera…'
+                ) : (
+                  'Point the camera at the barcode on the back'
+                )}
+              </p>
+
+              {/* Hidden mid-lookup: the camera is already down and the navigation is a
+                  moment away, so offering a form here would be offering a dead end. */}
+              {phase.kind === 'looking-up' ? null : (
+                <div className="absolute inset-x-0 bottom-6 flex justify-center">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={openManual}
+                    className="bg-white/15 text-white hover:bg-white/25"
+                  >
+                    <Keyboard className="h-4 w-4" />
+                    Type the ISBN instead
+                  </Button>
+                </div>
+              )}
+            </>
+          )}
+      </div>
     </div>
   )
 }

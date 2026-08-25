@@ -36,9 +36,19 @@ export interface BookCandidate {
   title: string
   authors: string[]
   coverUrl: string | null
+  /**
+   * The two paths mean subtly different things by this and one field holds both. Search
+   * reports `first_publish_year`, which belongs to the **work**; the ISBN lookup's
+   * `publish_date` belongs to **this edition**. A reader wants a year on the screen rather
+   * than a bibliographic distinction, so the collapse is deliberate — but it is a collapse.
+   */
   firstPublishYear: number | null
-  /** Only the scan path knows this; search never reports an ISBN. */
+  /** Only the scan path knows these; `search.json` is not asked for them (SPEC §9). */
   isbn13: string | null
+  subtitle: string | null
+  publisher: string | null
+  pageCount: number | null
+  subjects: string[]
 }
 
 /** The subset of `search.json` we ask for — anything else is not requested. */
@@ -52,13 +62,66 @@ interface SearchDoc {
 
 /**
  * The subset of an `api/books?jscmd=data` record we read. The full record also carries
- * subjects, classifications, publishers and pagination; none of it is wanted.
+ * `identifiers`, `classifications`, `pagination`, `weight`, `table_of_contents`, `links`
+ * and `excerpts`; none of those earns a field.
  */
 interface LookupRecord {
   key?: string
   title?: string
+  subtitle?: string
   authors?: { name?: string }[]
   cover?: { small?: string; medium?: string; large?: string }
+  publish_date?: string
+  number_of_pages?: number
+  publishers?: { name?: string }[]
+  subjects?: { name?: string }[]
+}
+
+/**
+ * `publish_date` is free text, and the three shapes seen in live data on 2026-08-24 were
+ * `"April 2, 2013"`, `"2022"` and `"September 08, 2020"` — so a year is matched out rather
+ * than parsed. The range guard is what stops a day, a page count or an edition number
+ * posing as one: only 1000-2099 counts.
+ */
+const YEAR = /\b(1\d{3}|20\d{2})\b/
+
+function publishYearOf(record: LookupRecord): number | null {
+  const match = record.publish_date ? YEAR.exec(record.publish_date) : null
+  return match ? Number(match[1]) : null
+}
+
+/**
+ * Eight is enough to say what a book is about and short enough to read on a phone.
+ *
+ * **The cap does most of the work, not the filter.** Open Library returned 23-36 subjects
+ * per book, ordered with the genuinely topical ones first and the tail full of noise. The
+ * two patterns below remove the shapes that are never useful — a leading Dewey-ish
+ * classification number (`54.10 theoretical informatics`) and a bare slug
+ * (`open_syllabus_project`). What they cannot remove is a foreign-language duplicate of a
+ * subject already listed (`Algorithmes`, `Kognition`), and no cheap rule would; those are
+ * dropped by the cap, because Open Library puts them after the English ones.
+ */
+const SUBJECT_LIMIT = 8
+const CLASSIFICATION_CODE = /^\d+(\.\d+)?\s/
+const BARE_SLUG = /^[a-z0-9]+(_[a-z0-9]+)+$/
+
+function subjectsOf(record: LookupRecord): string[] {
+  const seen = new Set<string>()
+  const kept: string[] = []
+
+  for (const subject of record.subjects ?? []) {
+    const name = subject.name?.trim()
+    if (!name || CLASSIFICATION_CODE.test(name) || BARE_SLUG.test(name)) continue
+
+    const key = name.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+
+    kept.push(name)
+    if (kept.length === SUBJECT_LIMIT) break
+  }
+
+  return kept
 }
 
 /**
@@ -80,6 +143,14 @@ function toCandidate(doc: SearchDoc): BookCandidate | null {
     coverUrl: doc.cover_i === undefined ? null : coverUrl(doc.cover_i),
     firstPublishYear: doc.first_publish_year ?? null,
     isbn13: null,
+    // `search.json` is asked for a fixed field list (`SPEC §9`) that does not include any
+    // of these, and widening it is deliberately out of scope — the results list is still
+    // unverified against live data. A book added by title simply starts without them, and
+    // every field on the Book screen is editable anyway.
+    subtitle: null,
+    publisher: null,
+    pageCount: null,
+    subjects: [],
   }
 }
 
@@ -144,8 +215,9 @@ export async function searchBooks(
  *   repeats them: `9780374533557` lists Daniel Kahneman twice under two author keys.
  * - `cover` carries complete URLs, where search gives a numeric id for `coverUrl()`.
  * - `key` is an edition key, not a work key.
- * - `publish_date` is a string like "April 2, 2013", so `firstPublishYear` stays null
- *   rather than guessing a year for a field nothing currently reads.
+ * - `publish_date` is a string like "April 2, 2013" — see `publishYearOf`, which matches a
+ *   year out of it rather than parsing a date. Until 2026-08-24 this path left
+ *   `firstPublishYear` null on the grounds that nothing read it; the Book screen does now.
  *
  * Returns null for a book Open Library doesn't have. Rate limiting is indistinguishable
  * from that — an empty body has no key either — and both land the caller on the same
@@ -181,7 +253,13 @@ export async function lookupIsbn(
       ),
     ],
     coverUrl: record.cover?.medium ?? null,
-    firstPublishYear: null,
+    firstPublishYear: publishYearOf(record),
     isbn13,
+    subtitle: record.subtitle?.trim() || null,
+    // First only. All three records read live on 2026-08-24 carried exactly one publisher,
+    // and one line on the Book screen is what a reader wants from this.
+    publisher: record.publishers?.[0]?.name?.trim() || null,
+    pageCount: typeof record.number_of_pages === 'number' ? record.number_of_pages : null,
+    subjects: subjectsOf(record),
   }
 }

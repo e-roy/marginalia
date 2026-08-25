@@ -329,6 +329,16 @@ interface Book {
   isbn13: string | null;          // from the barcode scan
   status: 'reading' | 'finished' | 'shelved';
 
+  // Everything the ISBN lookup returns beyond title, author and cover (§9). All five are
+  // absent on books created before 2026-08-24, so they are read through `toBook` in
+  // `lib/books.ts` rather than a bare cast — `subjects` is rendered with `.map`.
+  // The search path leaves them empty; `search.json` is not asked for them.
+  subtitle: string | null;
+  publishYear: number | null;     // this EDITION's year on the scan path
+  pageCount: number | null;
+  publisher: string | null;       // the first, where authors keeps all of them
+  subjects: string[];             // filtered and capped at 8 — the raw list runs to 30-odd
+
   // Chapter numbers ARE the identity. No chapter IDs anywhere.
   // Titles are optional and resolved at render time from this map.
   chapterTitles: Record<string, string>;  // { "12": "The Science of Availability" }
@@ -448,11 +458,15 @@ The `prompt` field is the highest-leverage detail in this document. Whisper
 accepts an initial prompt that biases decoding, so feed it the book:
 
 ```
-Notes on "Thinking, Fast and Slow" by Daniel Kahneman, chapter 12.
+Notes on "The Psychology of Money: Timeless Lessons on Wealth, Greed, and
+Happiness" by Morgan Housel, chapter 12.
 ```
 
-If the chapter has a title, include it. Proper nouns, author names, and the
-book's jargon then transcribe correctly instead of becoming phonetic mush. It
+The subtitle is included when the book has one, because that is usually where
+the actual subject matter is named — and the vocabulary it primes is the whole
+point of the prompt. If the chapter has a title, include that too. Proper nouns,
+author names, and the book's jargon then transcribe correctly instead of
+becoming phonetic mush. It
 costs nothing and is the single biggest accuracy win available.
 
 The result is stored verbatim as `rawText` and never overwritten.
@@ -556,9 +570,10 @@ it. Everything else is secondary.
 |---|---|
 | Now | Recent books, chapter stepper, record + type, today's notes |
 | Books | Shelf grouped by reading / finished / shelved; add book |
-| Book | Chapters with note counts; notes grouped by chapter; add titles; filter this book's notes; export; delete book. On a wide viewport a sticky chapter index sits beside the notes |
+| Book | Cover, title, subtitle and author as **plain text**; reading status; chapters with note counts; notes grouped by chapter; add titles; filter this book's notes; export; delete book. On a wide viewport a sticky chapter index sits beside the notes |
+| Book details | Everything the app knows about a book, **read-only until you tap Edit**: title, subtitle, author, year, pages, publisher, ISBN, subjects |
 | Note | Clean text (editable), raw toggle, re-polish, move chapter, delete |
-| Scan | Camera barcode scanner (lazy route) |
+| Scan | Camera barcode scanner (lazy route), with manual ISBN entry as its escape hatch |
 | Search | Client-side across all notes |
 | Settings | Server health, model pickers, export, sign out |
 
@@ -629,7 +644,8 @@ still bringing the barcode into frame. Note the format's own blind spot: the
 alternating 1/3 weighting cannot detect two adjacent digits swapped when they
 differ by exactly 5.
 
-**Lookup.** One call, returns title, authors, and cover:
+**Lookup.** One call, returning title, subtitle, authors, cover, publisher,
+publication year, page count and subjects:
 
 ```
 https://openlibrary.org/api/books?bibkeys=ISBN:{isbn13}&format=json&jscmd=data
@@ -640,8 +656,22 @@ the body is keyed by the literal string `ISBN:{isbn13}` and **a missing key is
 how "not found" arrives** — there is no 404; `authors` are objects carrying a
 `name`, and real records repeat an author under two keys, so deduplicate;
 `cover` holds complete URLs rather than the numeric `cover_i` search returns;
-and `key` is an **edition** key (`/books/OL…M`), not a work key. `publish_date`
-is a string, so no publication year is recorded from this path.
+and `key` is an **edition** key (`/books/OL…M`), not a work key.
+
+`publish_date` is free text — `"April 2, 2013"`, `"2022"` and
+`"September 08, 2020"` across three live records — so a four-digit year is
+matched out of it and range-guarded to 1000–2099, rather than parsed as a date.
+Note this is *this edition's* year, where the search path's `first_publish_year`
+is *the work's*; one `Book.publishYear` field holds both, because a reader wants
+a year on the screen rather than a bibliographic distinction.
+
+`publishers` is an array and the first is taken — all three live records carried
+exactly one. `subjects` runs to 23–36 entries per book with the topical ones
+first and noise in the tail (classification codes like
+`54.10 theoretical informatics`, bare slugs like `open_syllabus_project`, and
+non-English duplicates), so entries matching the first two shapes are dropped and
+the list is capped at 8. The cap is what removes the duplicates; no cheap rule
+would.
 
 Not found is normal, not an error. Prefill the ISBN, let the user type the rest.
 A timed-out or rate-limited lookup lands in exactly the same place.
@@ -667,6 +697,30 @@ instead of the fallback.
 ### Manual
 
 Title and author, nothing else required. Always available, always the fallback.
+
+Also reachable **from the scan screen itself**, as "Type the ISBN instead" — the thirteen
+digits are printed under every barcode, so a book that will not decode can still be added
+by its number rather than hunted for by title. It is offered while scanning and, more
+importantly, in the camera-denied state, which is the one place a decode is impossible by
+construction. A typed ISBN that fails validation says so, unlike a camera misread, which
+stays silent because the user is still bringing the barcode into frame.
+
+**A barcode that reads and a book Open Library does not have look identical otherwise**, and
+the blank form reads as a failed scan. It usually is not: `979-8` is the Amazon KDP and
+independent-publishing range, where coverage is thin. The form says which happened and keeps
+the ISBN either way.
+
+### Correcting a book afterwards
+
+Editable, but **not armed**. Metadata is frequently wrong, so a correction has to be
+reachable — that does not mean every field should be a live text input sitting above the
+notes you came to read, where a stray tap silently rewrites a title the scanner got right.
+The Book screen shows identity as plain text; corrections live on the book details screen
+behind an explicit **Edit**, with a Save that commits and a Cancel that does not.
+
+Reading status is the exception and stays on the Book screen: it is a tab rather than a text
+field, so it cannot be mistyped, a stray tap is visible and one tap undoes it, and marking a
+book finished is a reading action taken while looking at its notes.
 
 ---
 
@@ -738,11 +792,22 @@ service firebase.storage {
 Per-book Markdown, generated client-side, with YAML frontmatter so it drops
 straight into Obsidian. Untitled chapters export as just the number.
 
+Every key except `title`, `tags` and `exported` is **omitted when the book does
+not have it** — an absent property beats one Obsidian renders blank. `year` and
+`pages` are bare numbers so Obsidian types them as numbers; `subjects` is a flow
+sequence of *quoted* scalars, because a subject can contain a comma and a bare
+sequence would split it in two.
+
 ```markdown
 ---
 title: "Thinking, Fast and Slow"
+subtitle: "Timeless Lessons on Wealth, Greed, and Happiness"
 author: "Daniel Kahneman"
 isbn: "9780374533557"
+publisher: "Farrar, Straus and Giroux"
+year: 2013
+pages: 499
+subjects: ["Intuition", "Thought and thinking", "Decision making"]
 tags: [book-notes]
 exported: 2026-08-19
 ---
