@@ -1,4 +1,4 @@
-import { Keyboard, Library, Settings as SettingsIcon } from 'lucide-react'
+import { Keyboard, Library, Search as SearchIcon, Settings as SettingsIcon } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -94,6 +94,11 @@ export function Now() {
           </div>
         </div>
         <div className="flex items-center">
+          <Button variant="ghost" size="icon" asChild aria-label="Search">
+            <Link to="/search">
+              <SearchIcon className="h-4 w-4" />
+            </Link>
+          </Button>
           <Button variant="ghost" size="icon" asChild aria-label="Books">
             <Link to="/books">
               <Library className="h-4 w-4" />

@@ -15,6 +15,7 @@ import {
 } from 'firebase/firestore'
 
 import { deleteAudio } from '@/lib/audioQueue'
+import { withDeadline } from '@/lib/deadline'
 import { db } from '@/lib/firebase'
 import type { Book } from '@/lib/types'
 
@@ -144,27 +145,14 @@ const BATCH_LIMIT = 450
  *
  * Ten seconds is far longer than a single book's notes need over mobile data, and short
  * enough that nobody waits on it twice.
+ *
+ * The helper itself lives in `@/lib/deadline` since M7, because the export path needs the
+ * same guard around a read that also has no bound of its own. Note that the two take
+ * opposite lines on what a timeout *means*: here it refuses, because deleting on a stale
+ * read strands notes; there it falls back to the cache, because a read-only export cannot
+ * damage anything.
  */
 const READ_DEADLINE_MS = 10_000
-
-/** The sanitized code the UI maps to "no connection", matching Firestore's own. */
-export class ServerUnreachableError extends Error {
-  readonly code = 'unavailable'
-  constructor() {
-    super('Timed out reading the book’s notes from the server.')
-    this.name = 'ServerUnreachableError'
-  }
-}
-
-function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout>
-  const deadline = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new ServerUnreachableError()), ms)
-  })
-  // The losing promise is left to settle on its own — there is no way to cancel a
-  // Firestore read, and it has no side effects to clean up.
-  return Promise.race([work, deadline]).finally(() => clearTimeout(timer))
-}
 
 /**
  * Delete a book and every note filed under it (`SPEC §8`).
@@ -217,6 +205,7 @@ export async function deleteBook(
       return getDocsFromServer(query(notesOfUser(uid), where('bookId', '==', bookId)))
     })(),
     READ_DEADLINE_MS,
+    'Timed out reading the book’s notes from the server.',
   )
 
   onCommitting?.()

@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { NoteList } from '@/components/NoteList'
 import { Input } from '@/components/ui/input'
 import { setChapterTitle } from '@/lib/books'
+import { chapterAnchor } from '@/lib/format'
 import type { BookWithId, NoteWithId } from '@/lib/types'
 
 interface ChapterNotesProps {
@@ -11,6 +12,8 @@ interface ChapterNotesProps {
   book: BookWithId
   chapter: number | null
   notes: NoteWithId[]
+  /** Non-empty when the book's notes are filtered — marks the matches. */
+  terms?: string[]
 }
 
 /**
@@ -18,7 +21,7 @@ interface ChapterNotesProps {
  * name the chapter (SPEC §8). Titles are worth adding after the fact as well as during
  * reading, because the Whisper prompt picks them up for every later note.
  */
-export function ChapterNotes({ uid, book, chapter, notes }: ChapterNotesProps) {
+export function ChapterNotes({ uid, book, chapter, notes, terms = [] }: ChapterNotesProps) {
   const [editing, setEditing] = useState(false)
   const title = chapter === null ? null : (book.chapterTitles?.[String(chapter)] ?? null)
 
@@ -29,7 +32,9 @@ export function ChapterNotes({ uid, book, chapter, notes }: ChapterNotesProps) {
   }
 
   return (
-    <section className="flex flex-col gap-2">
+    // `scroll-mt-6` so a jump from the desktop chapter index leaves the heading clear of
+    // the top edge rather than flush against it.
+    <section id={chapterAnchor(chapter)} className="flex scroll-mt-6 flex-col gap-2">
       <div className="flex items-baseline justify-between gap-2">
         <h2 className="text-sm font-semibold">
           {chapter === null ? 'Unfiled' : `Chapter ${chapter}`}
@@ -70,7 +75,7 @@ export function ChapterNotes({ uid, book, chapter, notes }: ChapterNotesProps) {
         </button>
       )}
 
-      <NoteList notes={notes} showChapter={false} />
+      <NoteList notes={notes} showChapter={false} terms={terms} />
     </section>
   )
 }

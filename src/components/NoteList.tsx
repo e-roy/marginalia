@@ -1,7 +1,8 @@
 import { AlertTriangle, CloudOff, Loader2 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
-import { formatClockTime, formatDuration } from '@/lib/format'
+import { Highlighted } from '@/components/Highlighted'
+import { formatClockTime, formatDuration, formatNoteDate } from '@/lib/format'
 import { noteText, type NoteStatus, type NoteWithId } from '@/lib/types'
 
 /**
@@ -86,13 +87,17 @@ interface NoteListProps {
   notes: NoteWithId[]
   /** Off on the book screen, where the notes are already grouped under their chapter. */
   showChapter?: boolean
+  /** Search terms to mark up, when the list is showing filtered results. */
+  terms?: string[]
+  /** Replaces the "no notes yet" prompt when a filter is what emptied the list. */
+  empty?: string
 }
 
-export function NoteList({ notes, showChapter = true }: NoteListProps) {
+export function NoteList({ notes, showChapter = true, terms = [], empty }: NoteListProps) {
   if (notes.length === 0) {
     return (
       <p className="text-muted-foreground py-6 text-center text-sm">
-        No notes yet. Tap the button and say something.
+        {empty ?? 'No notes yet. Tap the button and say something.'}
       </p>
     )
   }
@@ -101,6 +106,10 @@ export function NoteList({ notes, showChapter = true }: NoteListProps) {
     <ul className="flex flex-col gap-4">
       {notes.map((note) => {
         const text = noteText(note)
+        // Absent when the note is from today, which is the only case where naming the day
+        // adds nothing — see `formatNoteDate`.
+        const date = formatNoteDate(note.recordedAt)
+
         return (
           <li key={note.id} className="border-border/60 border-b last:border-0">
             {/* The whole row is the target — on a phone, a tappable line of prose is
@@ -109,7 +118,13 @@ export function NoteList({ notes, showChapter = true }: NoteListProps) {
               to={`/notes/${note.id}`}
               className="hover:bg-accent/40 -mx-2 flex flex-col gap-1 rounded-md px-2 py-1 pb-4 transition-colors"
             >
-              <div className="text-muted-foreground flex items-center gap-2 text-xs">
+              <div className="text-muted-foreground flex flex-wrap items-center gap-x-2 text-xs">
+                {date ? (
+                  <>
+                    <span>{date}</span>
+                    <span aria-hidden>·</span>
+                  </>
+                ) : null}
                 <span className="tabular-nums">{formatClockTime(note.recordedAt)}</span>
                 <span aria-hidden>·</span>
                 <span className="tabular-nums">{formatDuration(note.durationMs)}</span>
@@ -122,7 +137,9 @@ export function NoteList({ notes, showChapter = true }: NoteListProps) {
               </div>
 
               {note.status === 'done' && text ? (
-                <p className="text-sm leading-relaxed whitespace-pre-wrap">{text}</p>
+                <p className="text-sm leading-relaxed whitespace-pre-wrap">
+                  <Highlighted text={text} terms={terms} />
+                </p>
               ) : (
                 <StatusLine note={note} />
               )}
