@@ -270,6 +270,48 @@ export async function retryNote(uid: string, noteId: string): Promise<void> {
 }
 
 /**
+ * Correct a note's text by hand (`SPEC §8`).
+ *
+ * **Writes `cleanText`, never `rawText`.** `SPEC §6` says the verbatim transcript is
+ * never overwritten, and that is what keeps **Show original** meaningful after an edit —
+ * `raw !== clean` is exactly the condition the Note screen already tests.
+ *
+ * `edited: true` is the load-bearing part. `repolishNote` refuses an edited note
+ * server-side and the Note screen hides **Re-polish** on the same field, so this one flag
+ * is what stops a model overwriting the user's own words
+ * ([[Decisions/Decision Log#ADR-012]]). It is one-way on purpose: pinning a different
+ * cleanup model later does not bring re-polish back, because your correction outranks
+ * anything the model would produce.
+ *
+ * Returns the promise rather than awaiting internally — see the Note screen for why the
+ * caller neither awaits it nor drops it.
+ */
+export function updateNoteText(uid: string, noteId: string, text: string): Promise<void> {
+  return updateDoc(noteRef(uid, noteId), {
+    cleanText: text,
+    edited: true,
+    updatedAt: serverTimestamp(),
+  })
+}
+
+/**
+ * File a note under a different chapter, or under none (`SPEC §8`).
+ *
+ * One field, and nothing to reconcile: chapter numbers *are* the identity
+ * ([[Decisions/Decision Log#ADR-003]]), so there are no chapter documents to create or
+ * clean up, and `noteCount` is per **book** rather than per chapter, so a move within a
+ * book leaves every counter alone. The `bookId, chapter, recordedAt` composite index
+ * simply reorders the note where it already was.
+ */
+export function moveNoteToChapter(
+  uid: string,
+  noteId: string,
+  chapter: number | null,
+): Promise<void> {
+  return updateDoc(noteRef(uid, noteId), { chapter, updatedAt: serverTimestamp() })
+}
+
+/**
  * Model discovery, plus a real test of the cleanup model. Auth-required and
  * server-side — the browser never contacts the speech server, and no model name is
  * hardcoded anywhere (SPEC §5).

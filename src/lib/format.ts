@@ -42,6 +42,44 @@ export function formatCountdown(value: Timestamp | null, nowMs = Date.now()): st
   return `${Math.round(ms / 60_000)}m`
 }
 
+/**
+ * `Aug 14`, or `Aug 14, 2025` when it is not this year — and **null when it is today**.
+ *
+ * Null rather than a string, because "today" is the one case where a date is noise: the
+ * Now screen's feed is filtered to today by construction, so every row there would carry
+ * the same redundant word. Everywhere else — a book's notes, a search result, a note you
+ * opened by URL — a bare `9:41 AM` names a moment without saying which day, which is no
+ * use at all on a note from three weeks ago.
+ *
+ * Locale-formatted, unlike the export's `YYYY-MM-DD` (`markdown.ts`): this is read on
+ * screen by one person, where a Markdown file is a durable artifact that must not change
+ * shape with the browser it was written in.
+ */
+export function formatNoteDate(value: Timestamp | null, nowMs = Date.now()): string | null {
+  if (!value || isToday(value)) return null
+
+  const date = value.toDate()
+  const sameYear = date.getFullYear() === new Date(nowMs).getFullYear()
+
+  return date.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    ...(sameYear ? {} : { year: 'numeric' }),
+  })
+}
+
+/**
+ * The DOM id a chapter's section carries, and what the desktop chapter index links to.
+ *
+ * `chapter-unfiled` rather than `chapter-null`, matching the `key` the Book screen has
+ * always used for the same group (`group.chapter ?? 'unfiled'`). Shared from here so the
+ * index and the section cannot spell it differently — a link that silently scrolls
+ * nowhere is the kind of bug nobody files.
+ */
+export function chapterAnchor(chapter: number | null): string {
+  return `chapter-${chapter ?? 'unfiled'}`
+}
+
 export function isToday(value: Timestamp | null): boolean {
   if (!value) return true // an unacked write is, by definition, from just now
   const date = value.toDate()

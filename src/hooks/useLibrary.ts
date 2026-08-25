@@ -69,6 +69,43 @@ export function useFailedNotes(uid: string | null): NoteWithId[] {
 }
 
 /**
+ * Every note, live, for the search screen (`SPEC §8`).
+ *
+ * Unbounded on purpose, and the shape `useFailedNotes` above already established. `SPEC
+ * §8` argues the case directly: "a single reader's lifetime of notes is a few megabytes,
+ * and Firestore persistence has already cached them" — which is also why search stays
+ * client-side rather than reaching for Algolia.
+ *
+ * **No `where` and no `orderBy`, so no composite index is involved at all** — Firestore
+ * serves a bare collection query from its automatic `__name__` index. Worth stating after
+ * M6 shipped a sweep that was silently dead on a wrong index-prefix assumption: there is
+ * no prefix reasoning here that could be wrong, and nothing to verify in production.
+ * Sorting happens on the client for the same reason `useBooks` does it.
+ *
+ * Mounted by the Search route and nowhere else, so no other screen pays for it.
+ */
+export function useAllNotes(uid: string | null): NoteWithId[] {
+  const [notes, setNotes] = useState<NoteWithId[]>([])
+
+  useEffect(() => {
+    if (!uid) return
+    return onSnapshot(
+      notesCollection(uid),
+      (snapshot) => {
+        setNotes(snapshot.docs.map((entry) => ({ id: entry.id, ...(entry.data() as Note) })))
+      },
+      (err) => console.error('[marginalia] all-notes subscription failed', err),
+    )
+  }, [uid])
+
+  // Newest first, on a client Timestamp so the order holds offline too.
+  return useMemo(() => {
+    if (!uid) return []
+    return [...notes].sort((a, b) => (b.recordedAt?.toMillis() ?? 0) - (a.recordedAt?.toMillis() ?? 0))
+  }, [uid, notes])
+}
+
+/**
  * Every book, in one subscription, sorted on the client.
  *
  * A reader has tens of books — the whole shelf is a few kilobytes, and holding it in

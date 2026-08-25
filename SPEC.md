@@ -556,7 +556,7 @@ it. Everything else is secondary.
 |---|---|
 | Now | Recent books, chapter stepper, record + type, today's notes |
 | Books | Shelf grouped by reading / finished / shelved; add book |
-| Book | Chapters with note counts; notes grouped by chapter; add titles; delete book |
+| Book | Chapters with note counts; notes grouped by chapter; add titles; filter this book's notes; export; delete book. On a wide viewport a sticky chapter index sits beside the notes |
 | Note | Clean text (editable), raw toggle, re-polish, move chapter, delete |
 | Scan | Camera barcode scanner (lazy route) |
 | Search | Client-side across all notes |
@@ -565,6 +565,16 @@ it. Everything else is secondary.
 Search is client-side on purpose. Firestore has no full-text search, a single
 reader's lifetime of notes is a few megabytes, and Firestore persistence has
 already cached them. Algolia would be cost and complexity for nothing.
+
+It exists in two places, over one matcher. The Search screen spans every book; the
+Book screen filters that book's notes **in place**, so the chapter structure survives
+— chapters with no match drop out of the index and the column together. Both are
+case-insensitive substring matching, AND across words, over what is actually on
+screen (`cleanText ?? rawText`, the note's title, the book's title).
+
+A note carries the **date** as well as the time everywhere except the Now screen's
+feed, which is filtered to today by construction. A bare `9:41 AM` on a note from
+three weeks ago names a moment without saying which day.
 
 ---
 

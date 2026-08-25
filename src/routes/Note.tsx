@@ -1,21 +1,51 @@
-import { ChevronLeft, Loader2, RotateCw, Sparkles, Trash2 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import {
+  ChevronLeft,
+  ChevronRight,
+  Loader2,
+  PencilLine,
+  RotateCw,
+  Sparkles,
+  Trash2,
+} from 'lucide-react'
+import { useCallback, useEffect, useState } from 'react'
 import { Link, Navigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 
 import { StatusLine } from '@/components/NoteList'
+import { ReadingScreen } from '@/components/ReadingScreen'
 import { Button } from '@/components/ui/button'
+import { Textarea } from '@/components/ui/textarea'
 import { useNote } from '@/hooks/useLibrary'
-import { formatClockTime, formatDuration } from '@/lib/format'
-import { deleteNote, repolishNote, retryNote } from '@/lib/notes'
+import { formatClockTime, formatDuration, formatNoteDate } from '@/lib/format'
+import {
+  deleteNote,
+  moveNoteToChapter,
+  repolishNote,
+  retryNote,
+  updateNoteText,
+} from '@/lib/notes'
 import { useAuth } from '@/stores/auth'
 
 /**
- * One note (`SPEC §8`). What M4 needs it for: seeing the cleaned-up text, comparing it
- * against the verbatim transcript, and re-running the polish.
+ * Grow a textarea to its content.
  *
- * Editing, moving a note between chapters, and deleting are deliberately not here yet —
- * inline editing is M7, and the other two are unassigned.
+ * `height: auto` first, so shrinking works as well as growing — `scrollHeight` on an
+ * already-tall element only ever reports the taller number. Deliberately not
+ * `field-sizing: content`, which would be four fewer lines but cannot be assumed on
+ * Safari, and Safari is what this app is for.
+ */
+function resize(element: HTMLTextAreaElement) {
+  element.style.height = 'auto'
+  element.style.height = `${element.scrollHeight}px`
+}
+
+/**
+ * One note (`SPEC §8`): the cleaned-up text, the verbatim transcript beside it, a
+ * re-polish, an in-place edit, the chapter it is filed under, and delete.
+ *
+ * Editing and moving arrived in M7 and are the two that interact: an edit sets
+ * `edited: true`, which is what withdraws **Re-polish** here and refuses it server-side
+ * ([[Decisions/Decision Log#ADR-012]]).
  */
 
 /**
@@ -44,11 +74,18 @@ export function Note() {
   const { note, loading } = useNote(uid, noteId)
 
   const [showRaw, setShowRaw] = useState(false)
+  const [editing, setEditing] = useState(false)
   const [polishing, setPolishing] = useState(false)
   const [retrying, setRetrying] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [deletedFrom, setDeletedFrom] = useState<string | null>(null)
+
+  // A ref callback rather than an effect: it fires when the textarea mounts, which is the
+  // one moment the initial height needs setting.
+  const grow = useCallback((element: HTMLTextAreaElement | null) => {
+    if (element) resize(element)
+  }, [])
 
   // Disarm on its own. A stray tap should not leave a destructive button primed for the
   // rest of the time this screen is open.
@@ -67,6 +104,7 @@ export function Note() {
   if (loading) return null
   if (!note) return <Navigate to="/" replace />
 
+  const noteDate = formatNoteDate(note.recordedAt)
   const raw = note.rawText
   const clean = note.cleanText
 
@@ -91,6 +129,54 @@ export function Note() {
    * so in words when this is false.
    */
   const canRetry = note.status === 'failed' && note.audioPath !== null
+
+  /**
+   * Editing is for a finished note with text you can see. A note still transcribing has
+   * nothing to correct yet, and the raw pane is the transcript — writing that into
+   * `cleanText` would throw the polish away without saying so.
+   */
+  const canEdit = note.status === 'done' && Boolean(body) && !showRaw
+
+  /**
+   * Both writes are `void`-ed with a `.catch`, never awaited — a stated position rather
+   * than the house default.
+   *
+   * Awaiting would hang the screen offline: `notes.ts` records that a Firestore write
+   * resolves only once the server acks it, so a saving spinner would spin all the way
+   * home from the train. A bare `void` is the opposite failure — blur has already put the
+   * `<p>` back, so a rejected write would drop the correction silently. The local cache
+   * applies the write synchronously and `onSnapshot` re-renders with it either way, so
+   * what the `.catch` actually catches is the class that has nothing to do with
+   * connectivity: rules and validation.
+   */
+  const commitEdit = (value: string) => {
+    setEditing(false)
+    if (!noteId) return
+
+    const next = value.trim()
+    // Nothing typed, or nothing changed. An empty note is a deletion, and the Delete
+    // button is right there — blanking the textarea should not be a second way to do it.
+    if (next.length === 0 || next === body) return
+
+    void updateNoteText(uid, noteId, next).catch((err: unknown) => {
+      console.error('[marginalia] edit failed', err)
+      toast.error('Could not save your edit.')
+    })
+  }
+
+  /** Below chapter 1 is Unfiled, exactly as the capture stepper has it (`SPEC §8`). */
+  const move = (delta: number) => {
+    if (!noteId) return
+    const from = note.chapter
+    const stepped = from === null ? (delta > 0 ? 1 : null) : from + delta
+    const next = stepped !== null && stepped < 1 ? null : stepped
+    if (next === from) return
+
+    void moveNoteToChapter(uid, noteId, next).catch((err: unknown) => {
+      console.error('[marginalia] move chapter failed', err)
+      toast.error('Could not move this note.')
+    })
+  }
 
   const retry = async () => {
     if (!noteId) return
@@ -147,7 +233,7 @@ export function Note() {
   }
 
   return (
-    <div className="mx-auto flex min-h-[var(--app-height)] w-full max-w-md flex-col gap-5 px-5 py-6">
+    <ReadingScreen>
       <header className="flex items-center gap-2">
         <Button variant="ghost" size="icon" asChild aria-label="Back">
           <Link to={`/books/${note.bookId}`}>
@@ -157,12 +243,59 @@ export function Note() {
         <h1 className="line-clamp-1 flex-1 text-sm font-semibold">{note.bookTitle}</h1>
       </header>
 
-      <div className="text-muted-foreground flex items-center gap-2 text-xs">
+      <div className="text-muted-foreground flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+        {/* A note is reachable by URL forever, so on this screen above all a time with no
+            day attached names nothing. Omitted only when it is today. */}
+        {noteDate ? (
+          <>
+            <span>{noteDate}</span>
+            <span aria-hidden>·</span>
+          </>
+        ) : null}
         <span className="tabular-nums">{formatClockTime(note.recordedAt)}</span>
         <span aria-hidden>·</span>
         <span className="tabular-nums">{formatDuration(note.durationMs)}</span>
         <span aria-hidden>·</span>
-        <span>{note.chapter === null ? 'Unfiled' : `Chapter ${note.chapter}`}</span>
+
+        {/* Stepping, not picking, and below chapter 1 is Unfiled — the same semantics
+            `ChapterStepper` uses on the Now screen, against `note.chapter` instead of
+            `book.currentChapter`. Copied rather than shared: the two write different
+            documents, and the shape is four lines. */}
+        <span className="inline-flex items-center gap-0.5">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6"
+            aria-label="Move to the previous chapter"
+            onClick={() => move(-1)}
+          >
+            <ChevronLeft className="h-3.5 w-3.5" />
+          </Button>
+          <span className="min-w-20 text-center tabular-nums">
+            {note.chapter === null ? 'Unfiled' : `Chapter ${note.chapter}`}
+          </span>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6"
+            aria-label="Move to the next chapter"
+            onClick={() => move(1)}
+          >
+            <ChevronRight className="h-3.5 w-3.5" />
+          </Button>
+        </span>
+
+        {/* Says why Re-polish vanished. Without it the button's absence reads as a bug
+            rather than as the note being yours now (ADR-012). */}
+        {note.edited ? (
+          <>
+            <span aria-hidden>·</span>
+            <span className="inline-flex items-center gap-1">
+              <PencilLine className="h-3 w-3" />
+              Edited
+            </span>
+          </>
+        ) : null}
       </div>
 
       {/* The LLM's 5-8 word summary. Absent for a typed note, and for any voice note
@@ -170,12 +303,33 @@ export function Note() {
       {note.title ? <h2 className="text-lg leading-snug font-semibold">{note.title}</h2> : null}
 
       {note.status === 'done' && body ? (
-        <p className="text-sm leading-relaxed whitespace-pre-wrap">{body}</p>
+        editing ? (
+          /* Uncontrolled — `defaultValue` plus commit-on-blur, the same idiom as the book
+             title and the chapter title. A controlled textarea would race the `onSnapshot`
+             that its own write triggers, and this app has already paid for that once with
+             the add-book author field that ate spaces. */
+          <Textarea
+            autoFocus
+            defaultValue={body}
+            ref={grow}
+            onInput={(event) => resize(event.currentTarget)}
+            onBlur={(event) => commitEdit(event.target.value)}
+            onKeyDown={(event) => {
+              // Escape reverts. Enter deliberately does not commit — a note is prose and
+              // needs its newlines, so the only way out is blur or Escape.
+              if (event.key === 'Escape') setEditing(false)
+            }}
+            aria-label="Note text"
+            className="resize-none overflow-hidden text-sm leading-relaxed"
+          />
+        ) : (
+          <p className="text-sm leading-relaxed whitespace-pre-wrap">{body}</p>
+        )
       ) : (
         <StatusLine note={note} withActions />
       )}
 
-      {comparable || canRepolish || canRetry ? (
+      {comparable || canRepolish || canRetry || canEdit ? (
         <div className="flex flex-wrap items-center gap-2">
           {/* First, because on a failed note it is the only thing worth doing. */}
           {canRetry ? (
@@ -186,6 +340,15 @@ export function Note() {
                 <RotateCw className="h-3.5 w-3.5" />
               )}
               Try again
+            </Button>
+          ) : null}
+
+          {/* Hidden while the raw pane is showing: editing there would write the
+              transcript into `cleanText` and quietly discard the polish. */}
+          {canEdit && !editing ? (
+            <Button variant="outline" size="sm" onClick={() => setEditing(true)}>
+              <PencilLine className="h-3.5 w-3.5" />
+              Edit
             </Button>
           ) : null}
 
@@ -239,6 +402,6 @@ export function Note() {
         <dt>Cleanup</dt>
         <dd className="truncate font-mono">{note.llmModel ?? 'not cleaned up'}</dd>
       </dl>
-    </div>
+    </ReadingScreen>
   )
 }

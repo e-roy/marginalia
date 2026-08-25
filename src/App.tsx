@@ -7,6 +7,7 @@ import { Book } from '@/routes/Book'
 import { Books } from '@/routes/Books'
 import { Note } from '@/routes/Note'
 import { Now } from '@/routes/Now'
+import { Search } from '@/routes/Search'
 import { Settings } from '@/routes/Settings'
 import { SignIn } from '@/routes/SignIn'
 import { initKeyboardInset } from '@/lib/keyboard'
@@ -73,6 +74,7 @@ export default function App() {
             <Route path="/books" element={<Books />} />
             <Route path="/books/:bookId" element={<Book />} />
             <Route path="/notes/:noteId" element={<Note />} />
+            <Route path="/search" element={<Search />} />
             <Route path="/settings" element={<Settings />} />
             <Route
               path="/scan"

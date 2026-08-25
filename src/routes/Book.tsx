@@ -1,10 +1,12 @@
-import { ChevronLeft, Loader2, Mic, Trash2 } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { ChevronLeft, Download, Loader2, Mic, Search as SearchIcon, Trash2 } from 'lucide-react'
+import { useDeferredValue, useId, useMemo, useState } from 'react'
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 
 import { BookCover } from '@/components/BookCover'
+import { ChapterIndex } from '@/components/ChapterIndex'
 import { ChapterNotes } from '@/components/ChapterNotes'
+import { ReadingScreen } from '@/components/ReadingScreen'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -21,6 +23,9 @@ import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useBook, useBookNotes, useBooks } from '@/hooks/useLibrary'
 import { deleteBook, updateBook } from '@/lib/books'
+import { downloadBlob } from '@/lib/download'
+import { bookExport, hasExportableNotes, MARKDOWN_MIME } from '@/lib/export'
+import { queryTerms, searchNotes } from '@/lib/search'
 import type { Book as BookDoc, NoteWithId } from '@/lib/types'
 import { useAuth } from '@/stores/auth'
 import { useLibrary } from '@/stores/library'
@@ -72,7 +77,27 @@ export function Book() {
   const [deleting, setDeleting] = useState(false)
   const [deleted, setDeleted] = useState(false)
 
-  const groups = useMemo(() => groupByChapter(notes), [notes])
+  const [filter, setFilter] = useState('')
+  const deferredFilter = useDeferredValue(filter)
+  const filterId = useId()
+
+  /**
+   * Filtering in place rather than sending you to the Search screen scoped to this book.
+   * You are already looking at the book, and the chapter structure is the thing worth
+   * keeping: chapters with no match drop out of the index *and* the column together,
+   * because both are derived from the same array.
+   *
+   * The same matcher the Search screen uses, so "two words means both" holds in both
+   * places and a query with regex metacharacters is escaped here too.
+   */
+  const terms = useMemo(() => queryTerms(deferredFilter), [deferredFilter])
+  const visible = useMemo(
+    () =>
+      terms.length === 0 ? notes : searchNotes(notes, deferredFilter).map((hit) => hit.note),
+    [notes, deferredFilter, terms],
+  )
+
+  const groups = useMemo(() => groupByChapter(visible), [visible])
 
   if (!uid) return <Navigate to="/" replace />
 
@@ -98,6 +123,27 @@ export function Book() {
       ? `“${book.title}” and its ${book.noteCount} note${book.noteCount === 1 ? '' : 's'} will be permanently deleted.`
       : `“${book.title}” will be permanently deleted.`
 
+  const canExport = hasExportableNotes(notes)
+
+  /**
+   * Generated and handed over synchronously — no await anywhere. Everything it needs is
+   * already in memory, which is the whole point of `SPEC §11`'s "runs entirely in the
+   * browser": no function, no cost, and no reason for it to fail offline.
+   */
+  const exportMarkdown = () => {
+    const { markdown, filename, written, skipped } = bookExport(book, notes)
+    downloadBlob(new Blob([markdown], { type: MARKDOWN_MIME }), filename)
+
+    const count = `${written} note${written === 1 ? '' : 's'}`
+    toast.success(
+      skipped === 0
+        ? `Exported ${count}.`
+        // Named rather than dropped silently: a note still transcribing will be there
+        // next time, and one that failed never will.
+        : `Exported ${count}. ${skipped} without a transcript left out.`,
+    )
+  }
+
   const remove = async () => {
     setDeleting(true)
     try {
@@ -119,7 +165,7 @@ export function Book() {
   }
 
   return (
-    <div className="mx-auto flex min-h-[var(--app-height)] w-full max-w-md flex-col gap-5 px-5 py-6">
+    <ReadingScreen width="wide">
       <header className="flex items-center gap-2">
         <Button variant="ghost" size="icon" asChild aria-label="Back">
           <Link to="/books">
@@ -188,31 +234,79 @@ export function Book() {
         </TabsList>
       </Tabs>
 
-      <Button
-        onClick={() => {
-          select(book.id)
-          void navigate('/')
-        }}
-      >
-        <Mic className="h-4 w-4" />
-        Record against this book
-      </Button>
+      <div className="flex gap-2">
+        <Button
+          className="flex-1"
+          onClick={() => {
+            select(book.id)
+            void navigate('/')
+          }}
+        >
+          <Mic className="h-4 w-4" />
+          Record against this book
+        </Button>
+
+        {/* Reads the notes already on screen — the export is a pure transform of this
+            subscription, so it costs no read and works offline (`SPEC §11`).
+
+            "yet" is doing real work in that label. `useBookNotes` has no `loading` flag,
+            so a book that *does* have notes sits here for the moment before its
+            subscription delivers, and a message asserting the book is empty would be
+            wrong exactly then. */}
+        <Button
+          variant="outline"
+          disabled={!canExport}
+          title={canExport ? undefined : 'No notes to export yet.'}
+          onClick={exportMarkdown}
+        >
+          <Download className="h-4 w-4" />
+          Export
+        </Button>
+      </div>
+
+      {/* Only once there is something to search. On a book with three notes a filter box
+          is furniture; on one with two hundred it is the only way back to a thought. */}
+      {notes.length > 0 ? (
+        <div className="relative">
+          <SearchIcon className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2" />
+          <Input
+            id={filterId}
+            name="book-search"
+            type="search"
+            value={filter}
+            onChange={(event) => setFilter(event.target.value)}
+            placeholder={`Search this book’s ${notes.length} note${notes.length === 1 ? '' : 's'}`}
+            aria-label="Search this book’s notes"
+            className="h-9 pl-9"
+          />
+        </div>
+      ) : null}
 
       {groups.length === 0 ? (
         <p className="text-muted-foreground py-10 text-center text-sm">
-          No notes on this book yet.
+          {terms.length > 0
+            ? 'No notes in this book match that.'
+            : 'No notes on this book yet.'}
         </p>
       ) : (
-        <div className="flex flex-col gap-6">
-          {groups.map((group) => (
-            <ChapterNotes
-              key={group.chapter ?? 'unfiled'}
-              uid={uid}
-              book={book}
-              chapter={group.chapter}
-              notes={group.notes}
-            />
-          ))}
+        // Two panes on a desktop, one on a phone. Everything above this stays full
+        // width — the cover, the editable metadata, the shelf tabs and the two buttons
+        // are a header band, not part of the reading column.
+        <div className="lg:grid lg:grid-cols-[14rem_minmax(0,1fr)] lg:gap-10">
+          <ChapterIndex groups={groups} chapterTitles={book.chapterTitles} />
+
+          <div className="flex flex-col gap-6">
+            {groups.map((group) => (
+              <ChapterNotes
+                key={group.chapter ?? 'unfiled'}
+                uid={uid}
+                book={book}
+                chapter={group.chapter}
+                notes={group.notes}
+                terms={terms}
+              />
+            ))}
+          </div>
         </div>
       )}
 
@@ -267,6 +361,6 @@ export function Book() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </ReadingScreen>
   )
 }
