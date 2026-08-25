@@ -147,6 +147,13 @@ function tableOfContentsOf(record: LookupRecord): TocEntry[] {
   return entries
 }
 
+/**
+ * The same cap as subjects, but its own constant: these are different lists with
+ * different tails, and a shared limit named for one of them invites a change to the
+ * other by accident. Live records carried at most two.
+ */
+const SUBJECT_PEOPLE_LIMIT = 8
+
 function subjectPeopleOf(record: LookupRecord): string[] {
   const seen = new Set<string>()
   const kept: string[] = []
@@ -158,7 +165,7 @@ function subjectPeopleOf(record: LookupRecord): string[] {
     if (seen.has(key)) continue
     seen.add(key)
     kept.push(name)
-    if (kept.length === SUBJECT_LIMIT) break
+    if (kept.length === SUBJECT_PEOPLE_LIMIT) break
   }
 
   return kept

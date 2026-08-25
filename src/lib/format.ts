@@ -90,3 +90,25 @@ export function isToday(value: Timestamp | null): boolean {
     date.getDate() === now.getDate()
   )
 }
+
+/**
+ * `2020 · 256 pages · Harriman House` — a book's publication details on one line, skipping
+ * whatever Open Library did not have, and null when it had none of it.
+ *
+ * Shared because it is rendered in two places over two different shapes — the add-book
+ * sheet's `Draft` and the details screen's `Book` — and two copies of a display rule are two
+ * chances for the same book to read differently on consecutive screens.
+ */
+export function formatPublication(
+  publishYear: number | null,
+  pageCount: number | null,
+  publisher: string | null,
+): string | null {
+  const parts = [
+    publishYear === null ? null : String(publishYear),
+    pageCount === null ? null : `${pageCount} page${pageCount === 1 ? '' : 's'}`,
+    publisher,
+  ].filter((part): part is string => Boolean(part))
+
+  return parts.length > 0 ? parts.join(' · ') : null
+}

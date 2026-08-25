@@ -20,6 +20,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useBook, useBooks } from '@/hooks/useLibrary'
 import { deleteBook, updateBook } from '@/lib/books'
+import { formatPublication } from '@/lib/format'
 import type { BookWithId } from '@/lib/types'
 import { useAuth } from '@/stores/auth'
 import { useLibrary } from '@/stores/library'
@@ -244,13 +245,7 @@ export function BookDetails() {
     }
   }
 
-  const published = [
-    book.publishYear === null ? null : String(book.publishYear),
-    book.pageCount === null ? null : `${book.pageCount} pages`,
-    book.publisher,
-  ]
-    .filter((part): part is string => Boolean(part))
-    .join(' · ')
+  const published = formatPublication(book.publishYear, book.pageCount, book.publisher)
 
   return (
     <ReadingScreen>
@@ -382,7 +377,7 @@ export function BookDetails() {
           ) : null}
 
           <dl className="divide-border divide-y">
-            <Row label="Published" value={published || null} />
+            <Row label="Published" value={published} />
             <Row label="ISBN" value={book.isbn13} />
             <Row label="Subjects" value={book.subjects.join(', ') || null} />
             <Row label="People" value={book.subjectPeople.join(', ') || null} />

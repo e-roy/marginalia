@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/sheet'
 import { createBook, type NewBook } from '@/lib/books'
 import { isCameraSupported } from '@/lib/camera'
+import { formatPublication } from '@/lib/format'
 import { searchBooks, type BookCandidate, type TocEntry } from '@/lib/openLibrary'
 
 interface AddBookSheetProps {
@@ -140,15 +141,9 @@ function isScannedButUnknown(draft: Draft): boolean {
   return draft.isbn13 !== null && draft.title.trim().length === 0
 }
 
-/** `2020 · 256 pages · Harriman House`, skipping whatever Open Library didn't have. */
+/** The publication line, over the draft — see `formatPublication`. */
 function metadataLine(draft: Draft): string | null {
-  const parts = [
-    draft.publishYear === null ? null : String(draft.publishYear),
-    draft.pageCount === null ? null : `${draft.pageCount} pages`,
-    draft.publisher,
-  ].filter((part): part is string => Boolean(part))
-
-  return parts.length > 0 ? parts.join(' · ') : null
+  return formatPublication(draft.publishYear, draft.pageCount, draft.publisher)
 }
 
 /**
