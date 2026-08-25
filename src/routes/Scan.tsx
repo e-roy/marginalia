@@ -30,7 +30,8 @@ const SCAN_ATTEMPT_INTERVAL_MS = 300
 type Phase =
   | { kind: 'starting' }
   | { kind: 'scanning' }
-  | { kind: 'looking-up' }
+  /** Carries the number so the screen can show what it is looking up. */
+  | { kind: 'looking-up'; isbn13: string }
   | { kind: 'blocked'; message: string }
   /**
    * Typing the number printed under the barcode. Reachable from `scanning` — some books
@@ -55,6 +56,20 @@ export function Scan() {
   /** Local to this screen and to this attempt — nothing else has any use for either. */
   const [typedIsbn, setTypedIsbn] = useState('')
   const [typedError, setTypedError] = useState<string | null>(null)
+
+  /**
+   * The last camera frame, held as a still while the lookup runs.
+   *
+   * The camera is stopped the instant a barcode decodes, which is right — the lookup can run
+   * for twelve seconds and there is no reason to keep the sensor live through it. But it left
+   * the viewfinder as a **black rectangle** with the guide box still drawn over nothing, which
+   * reads as the camera having died rather than as work in progress. Freezing the frame keeps
+   * the book on screen and doubles as confirmation of what was actually read.
+   *
+   * Null on the manual-entry path, where there is no frame to keep — the overlay below simply
+   * falls back to the dim background.
+   */
+  const [frozenFrame, setFrozenFrame] = useState<string | null>(null)
 
   /**
    * Live scanner state kept outside React, for the same reason `capture.ts` keeps the
@@ -95,10 +110,27 @@ export function Scan() {
 
   const onDecoded = useCallback(
     async (isbn13: string) => {
-      // Stop the camera the moment we have something. The lookup can run for ten
+      // Grab the frame *before* the teardown nulls `srcObject`, or there is nothing left to
+      // draw. One canvas readback on a successful scan — not the per-attempt cost that made
+      // `TRY_HARDER` unaffordable, and it happens once rather than several times a second.
+      const video = videoRef.current
+      let frame: string | null = null
+      if (video?.videoWidth) {
+        const canvas = document.createElement('canvas')
+        canvas.width = video.videoWidth
+        canvas.height = video.videoHeight
+        const context = canvas.getContext('2d')
+        if (context) {
+          context.drawImage(video, 0, 0)
+          frame = canvas.toDataURL('image/jpeg', 0.7)
+        }
+      }
+
+      // Stop the camera the moment we have something. The lookup can run for twelve
       // seconds and there is no reason to keep the sensor live through it.
       teardown()
-      toPhase({ kind: 'looking-up' })
+      setFrozenFrame(frame)
+      toPhase({ kind: 'looking-up', isbn13 })
 
       const controller = new AbortController()
       abortRef.current = controller
@@ -395,6 +427,30 @@ export function Scan() {
                 </div>
               </form>
             </div>
+          ) : phase.kind === 'looking-up' ? (
+            /*
+              The scan worked and the network is now the slow part — so say so, over the
+              frame that was just read rather than over a black rectangle. The guide box is
+              deliberately gone: there is nothing left to aim, and leaving it up implies the
+              camera is still running.
+            */
+            <>
+              {frozenFrame ? (
+                <img
+                  src={frozenFrame}
+                  alt=""
+                  className="absolute inset-0 h-full w-full object-cover"
+                />
+              ) : null}
+
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/65 px-8 text-center">
+                <Loader2 className="h-7 w-7 animate-spin text-white" />
+                <p className="text-white">Looking up this book…</p>
+                {/* The number is the proof the scan succeeded, which matters most in the
+                    case where the lookup is about to come back with nothing. */}
+                <p className="font-mono text-sm tracking-wide text-white/70">{phase.isbn13}</p>
+              </div>
+            </>
           ) : (
             <>
               {/* The guide box. Book barcodes are wide, so this is a letterbox rather than
@@ -404,33 +460,22 @@ export function Scan() {
               </div>
 
               <p className="absolute inset-x-0 bottom-20 text-center text-sm text-white/90">
-                {phase.kind === 'looking-up' ? (
-                  <span className="inline-flex items-center gap-2">
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Looking it up…
-                  </span>
-                ) : phase.kind === 'starting' ? (
-                  'Starting the camera…'
-                ) : (
-                  'Point the camera at the barcode on the back'
-                )}
+                {phase.kind === 'starting'
+                  ? 'Starting the camera…'
+                  : 'Point the camera at the barcode on the back'}
               </p>
 
-              {/* Hidden mid-lookup: the camera is already down and the navigation is a
-                  moment away, so offering a form here would be offering a dead end. */}
-              {phase.kind === 'looking-up' ? null : (
-                <div className="absolute inset-x-0 bottom-6 flex justify-center">
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={openManual}
-                    className="bg-white/15 text-white hover:bg-white/25"
-                  >
-                    <Keyboard className="h-4 w-4" />
-                    Type the ISBN instead
-                  </Button>
-                </div>
-              )}
+              <div className="absolute inset-x-0 bottom-6 flex justify-center">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={openManual}
+                  className="bg-white/15 text-white hover:bg-white/25"
+                >
+                  <Keyboard className="h-4 w-4" />
+                  Type the ISBN instead
+                </Button>
+              </div>
             </>
           )}
       </div>
