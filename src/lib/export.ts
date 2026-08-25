@@ -1,6 +1,6 @@
 import { getDocs, getDocsFromCache } from 'firebase/firestore'
 
-import { booksCollection } from '@/lib/books'
+import { booksCollection, toBook } from '@/lib/books'
 import { withDeadline } from '@/lib/deadline'
 import {
   bookMarkdown,
@@ -10,7 +10,7 @@ import {
   type ExportNote,
 } from '@/lib/markdown'
 import { notesCollection } from '@/lib/notes'
-import { noteText, type Book, type BookWithId, type Note, type NoteWithId } from '@/lib/types'
+import { noteText, type BookWithId, type Note, type NoteWithId } from '@/lib/types'
 import { zipStore } from '@/lib/zip'
 
 /**
@@ -35,7 +35,16 @@ export interface BookExport {
 }
 
 function toExportBook(book: BookWithId): ExportBook {
-  return { title: book.title, authors: book.authors, isbn13: book.isbn13 }
+  return {
+    title: book.title,
+    authors: book.authors,
+    isbn13: book.isbn13,
+    subtitle: book.subtitle,
+    publishYear: book.publishYear,
+    pageCount: book.pageCount,
+    publisher: book.publisher,
+    subjects: book.subjects,
+  }
 }
 
 /**
@@ -161,7 +170,11 @@ export async function exportAll(
     ])
   })
 
-  const books = bookDocs.docs.map((entry) => ({ id: entry.id, ...(entry.data() as Book) }))
+  // Through `toBook` for the same reason `useBooks` is: a book written before the metadata
+  // fields existed has none of them, and `bookMarkdown` reads `subjects` with `.map`. This
+  // is the read the per-book Export button never touches — that one is fed by `useBook`,
+  // which is already normalized — so a bare cast here fails only on **Export all**.
+  const books = bookDocs.docs.map((entry) => toBook(entry.id, entry.data()))
 
   const byBook = new Map<string, NoteWithId[]>()
   for (const entry of noteDocs.docs) {

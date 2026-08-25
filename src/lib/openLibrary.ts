@@ -36,9 +36,43 @@ export interface BookCandidate {
   title: string
   authors: string[]
   coverUrl: string | null
+  /**
+   * The two paths mean subtly different things by this and one field holds both. Search
+   * reports `first_publish_year`, which belongs to the **work**; the ISBN lookup's
+   * `publish_date` belongs to **this edition**. A reader wants a year on the screen rather
+   * than a bibliographic distinction, so the collapse is deliberate — but it is a collapse.
+   */
   firstPublishYear: number | null
-  /** Only the scan path knows this; search never reports an ISBN. */
+  /** Only the scan path knows these; `search.json` is not asked for them (SPEC §9). */
   isbn13: string | null
+  subtitle: string | null
+  publisher: string | null
+  pageCount: number | null
+  subjects: string[]
+  /** People the book is *about*, which is not the same thing as its subjects. */
+  subjectPeople: string[]
+  /**
+   * The publisher's blurb. The **only** field that needs a second request — it is in
+   * `jscmd=details` and not in `jscmd=data` — so it is best-effort and null when that call
+   * fails or the record has none.
+   */
+  description: string | null
+  /**
+   * The printed table of contents.
+   *
+   * Deliberately **not** written into `Book.chapterTitles`, and that separation is the
+   * point. `chapterTitles` is what the reader sets and what `functions/src/prompt.ts` feeds
+   * to Whisper; this is what Open Library claims. Merging them would push a third party's
+   * chapter titles into the transcription prompt through the back door.
+   */
+  tableOfContents: TocEntry[]
+}
+
+export interface TocEntry {
+  /** The printed chapter number. Null for front matter and part dividers, which have none. */
+  chapter: number | null
+  title: string
+  page: number | null
 }
 
 /** The subset of `search.json` we ask for — anything else is not requested. */
@@ -52,13 +86,136 @@ interface SearchDoc {
 
 /**
  * The subset of an `api/books?jscmd=data` record we read. The full record also carries
- * subjects, classifications, publishers and pagination; none of it is wanted.
+ * `identifiers`, `classifications`, `pagination`, `weight`, `table_of_contents`, `links`
+ * and `excerpts`; none of those earns a field.
  */
 interface LookupRecord {
   key?: string
   title?: string
+  subtitle?: string
   authors?: { name?: string }[]
   cover?: { small?: string; medium?: string; large?: string }
+  publish_date?: string
+  number_of_pages?: number
+  publishers?: { name?: string }[]
+  subjects?: { name?: string }[]
+  subject_people?: { name?: string }[]
+  table_of_contents?: { level?: number; label?: string; title?: string; pagenum?: string }[]
+}
+
+/**
+ * `jscmd=details` wraps a rather different record, and it is **not** a superset of
+ * `jscmd=data` — notably it has no `authors` at all on the records checked, only a `works`
+ * key, so it cannot replace the `data` call. It is fetched alongside purely for
+ * `description`.
+ */
+interface DetailsRecord {
+  details?: {
+    // Open Library returns this either as a plain string or as a typed `{ type, value }`
+    // object depending on when the record was last edited. Both are live in the data.
+    description?: string | { value?: string }
+  }
+}
+
+/** Long enough for a real blurb, short enough that a pathological record cannot bloat a document. */
+const DESCRIPTION_LIMIT = 2_000
+
+/**
+ * A TOC is reference data, not a chapter map — see `BookCandidate.tableOfContents`.
+ *
+ * `label` is the printed chapter number and is **empty for front matter and part
+ * dividers** ("Introduction", "PART I. Two Systems"), which are kept with a null chapter
+ * because they are real rows of a real table of contents. `pagenum` is likewise a string
+ * and likewise sometimes empty.
+ */
+const TOC_LIMIT = 100
+
+function tableOfContentsOf(record: LookupRecord): TocEntry[] {
+  const entries: TocEntry[] = []
+
+  for (const row of record.table_of_contents ?? []) {
+    const title = row.title?.trim()
+    if (!title) continue
+
+    const chapter = row.label && /^\d+$/.test(row.label.trim()) ? Number(row.label.trim()) : null
+    const page = row.pagenum && /^\d+$/.test(row.pagenum.trim()) ? Number(row.pagenum.trim()) : null
+
+    entries.push({ chapter, title, page })
+    if (entries.length === TOC_LIMIT) break
+  }
+
+  return entries
+}
+
+/**
+ * The same cap as subjects, but its own constant: these are different lists with
+ * different tails, and a shared limit named for one of them invites a change to the
+ * other by accident. Live records carried at most two.
+ */
+const SUBJECT_PEOPLE_LIMIT = 8
+
+function subjectPeopleOf(record: LookupRecord): string[] {
+  const seen = new Set<string>()
+  const kept: string[] = []
+
+  for (const person of record.subject_people ?? []) {
+    const name = person.name?.trim()
+    if (!name) continue
+    const key = name.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    kept.push(name)
+    if (kept.length === SUBJECT_PEOPLE_LIMIT) break
+  }
+
+  return kept
+}
+
+/**
+ * `publish_date` is free text, and the three shapes seen in live data on 2026-08-24 were
+ * `"April 2, 2013"`, `"2022"` and `"September 08, 2020"` — so a year is matched out rather
+ * than parsed. The range guard is what stops a day, a page count or an edition number
+ * posing as one: only 1000-2099 counts.
+ */
+const YEAR = /\b(1\d{3}|20\d{2})\b/
+
+function publishYearOf(record: LookupRecord): number | null {
+  const match = record.publish_date ? YEAR.exec(record.publish_date) : null
+  return match ? Number(match[1]) : null
+}
+
+/**
+ * Eight is enough to say what a book is about and short enough to read on a phone.
+ *
+ * **The cap does most of the work, not the filter.** Open Library returned 23-36 subjects
+ * per book, ordered with the genuinely topical ones first and the tail full of noise. The
+ * two patterns below remove the shapes that are never useful — a leading Dewey-ish
+ * classification number (`54.10 theoretical informatics`) and a bare slug
+ * (`open_syllabus_project`). What they cannot remove is a foreign-language duplicate of a
+ * subject already listed (`Algorithmes`, `Kognition`), and no cheap rule would; those are
+ * dropped by the cap, because Open Library puts them after the English ones.
+ */
+const SUBJECT_LIMIT = 8
+const CLASSIFICATION_CODE = /^\d+(\.\d+)?\s/
+const BARE_SLUG = /^[a-z0-9]+(_[a-z0-9]+)+$/
+
+function subjectsOf(record: LookupRecord): string[] {
+  const seen = new Set<string>()
+  const kept: string[] = []
+
+  for (const subject of record.subjects ?? []) {
+    const name = subject.name?.trim()
+    if (!name || CLASSIFICATION_CODE.test(name) || BARE_SLUG.test(name)) continue
+
+    const key = name.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+
+    kept.push(name)
+    if (kept.length === SUBJECT_LIMIT) break
+  }
+
+  return kept
 }
 
 /**
@@ -80,6 +237,17 @@ function toCandidate(doc: SearchDoc): BookCandidate | null {
     coverUrl: doc.cover_i === undefined ? null : coverUrl(doc.cover_i),
     firstPublishYear: doc.first_publish_year ?? null,
     isbn13: null,
+    // `search.json` is asked for a fixed field list (`SPEC §9`) that does not include any
+    // of these, and widening it is deliberately out of scope — the results list is still
+    // unverified against live data. A book added by title simply starts without them, and
+    // every field on the Book screen is editable anyway.
+    subtitle: null,
+    publisher: null,
+    pageCount: null,
+    subjects: [],
+    subjectPeople: [],
+    description: null,
+    tableOfContents: [],
   }
 }
 
@@ -144,23 +312,57 @@ export async function searchBooks(
  *   repeats them: `9780374533557` lists Daniel Kahneman twice under two author keys.
  * - `cover` carries complete URLs, where search gives a numeric id for `coverUrl()`.
  * - `key` is an edition key, not a work key.
- * - `publish_date` is a string like "April 2, 2013", so `firstPublishYear` stays null
- *   rather than guessing a year for a field nothing currently reads.
+ * - `publish_date` is a string like "April 2, 2013" — see `publishYearOf`, which matches a
+ *   year out of it rather than parsing a date. Until 2026-08-24 this path left
+ *   `firstPublishYear` null on the grounds that nothing read it; the Book screen does now.
  *
  * Returns null for a book Open Library doesn't have. Rate limiting is indistinguishable
  * from that — an empty body has no key either — and both land the caller on the same
  * prefilled form, so the ambiguity costs nothing here.
  */
+function lookupUrl(isbn13: string, jscmd: 'data' | 'details'): URL {
+  const url = new URL(LOOKUP_URL)
+  url.searchParams.set('bibkeys', `ISBN:${isbn13}`)
+  url.searchParams.set('format', 'json')
+  url.searchParams.set('jscmd', jscmd)
+  return url
+}
+
+/**
+ * The description, or null. Never throws.
+ *
+ * A second request, fired **concurrently** with the `data` one rather than after it, so it
+ * costs a connection but not a wait. Best-effort by construction: a blurb is worth having
+ * and is worth nothing at the price of losing the book, which is the same stance `SPEC §9`
+ * takes on the whole lookup.
+ */
+async function fetchDescription(isbn13: string, signal?: AbortSignal): Promise<string | null> {
+  try {
+    const response = await fetch(lookupUrl(isbn13, 'details'), {
+      signal: withTimeout(LOOKUP_TIMEOUT_MS, signal),
+    })
+    if (!response.ok) return null
+
+    const body = (await response.json()) as Record<string, DetailsRecord | undefined>
+    const raw = body[`ISBN:${isbn13}`]?.details?.description
+    const text = (typeof raw === 'string' ? raw : raw?.value)?.trim()
+    return text ? text.slice(0, DESCRIPTION_LIMIT) : null
+  } catch {
+    return null
+  }
+}
+
 export async function lookupIsbn(
   isbn13: string,
   signal?: AbortSignal,
 ): Promise<BookCandidate | null> {
-  const url = new URL(LOOKUP_URL)
-  url.searchParams.set('bibkeys', `ISBN:${isbn13}`)
-  url.searchParams.set('format', 'json')
-  url.searchParams.set('jscmd', 'data')
+  // Concurrent, not sequential. `description` is the only reason for the second call and it
+  // is optional, so waiting for it in series would make every scan slower for a blurb.
+  const [response, description] = await Promise.all([
+    fetch(lookupUrl(isbn13, 'data'), { signal: withTimeout(LOOKUP_TIMEOUT_MS, signal) }),
+    fetchDescription(isbn13, signal),
+  ])
 
-  const response = await fetch(url, { signal: withTimeout(LOOKUP_TIMEOUT_MS, signal) })
   if (!response.ok) {
     throw new Error(`Open Library lookup failed (${response.status})`)
   }
@@ -181,7 +383,16 @@ export async function lookupIsbn(
       ),
     ],
     coverUrl: record.cover?.medium ?? null,
-    firstPublishYear: null,
+    firstPublishYear: publishYearOf(record),
     isbn13,
+    subtitle: record.subtitle?.trim() || null,
+    // First only. All three records read live on 2026-08-24 carried exactly one publisher,
+    // and one line on the Book screen is what a reader wants from this.
+    publisher: record.publishers?.[0]?.name?.trim() || null,
+    pageCount: typeof record.number_of_pages === 'number' ? record.number_of_pages : null,
+    subjects: subjectsOf(record),
+    subjectPeople: subjectPeopleOf(record),
+    description,
+    tableOfContents: tableOfContentsOf(record),
   }
 }

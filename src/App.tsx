@@ -4,6 +4,7 @@ import { Toaster } from '@/components/ui/sonner'
 import { AutoUpdate } from '@/components/AutoUpdate'
 import { Mark } from '@/components/Mark'
 import { Book } from '@/routes/Book'
+import { BookDetails } from '@/routes/BookDetails'
 import { Books } from '@/routes/Books'
 import { Note } from '@/routes/Note'
 import { Now } from '@/routes/Now'
@@ -73,6 +74,7 @@ export default function App() {
             <Route path="/" element={<Now />} />
             <Route path="/books" element={<Books />} />
             <Route path="/books/:bookId" element={<Book />} />
+            <Route path="/books/:bookId/details" element={<BookDetails />} />
             <Route path="/notes/:noteId" element={<Note />} />
             <Route path="/search" element={<Search />} />
             <Route path="/settings" element={<Settings />} />

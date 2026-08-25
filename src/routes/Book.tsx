@@ -1,4 +1,4 @@
-import { ChevronLeft, Download, Loader2, Mic, Search as SearchIcon, Trash2 } from 'lucide-react'
+import { ChevronLeft, Download, Mic, Search as SearchIcon } from 'lucide-react'
 import { useDeferredValue, useId, useMemo, useState } from 'react'
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -7,22 +7,11 @@ import { BookCover } from '@/components/BookCover'
 import { ChapterIndex } from '@/components/ChapterIndex'
 import { ChapterNotes } from '@/components/ChapterNotes'
 import { ReadingScreen } from '@/components/ReadingScreen'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useBook, useBookNotes, useBooks } from '@/hooks/useLibrary'
-import { deleteBook, updateBook } from '@/lib/books'
+import { updateBook } from '@/lib/books'
 import { downloadBlob } from '@/lib/download'
 import { bookExport, hasExportableNotes, MARKDOWN_MIME } from '@/lib/export'
 import { queryTerms, searchNotes } from '@/lib/search'
@@ -50,19 +39,6 @@ function groupByChapter(notes: NoteWithId[]): { chapter: number | null; notes: N
   return [...groups.entries()].map(([chapter, chapterNotes]) => ({ chapter, notes: chapterNotes }))
 }
 
-/**
- * `deleteBook` reads the server before it deletes anything, so a missing connection is
- * the one failure worth naming: nothing changed, and trying again on a signal will work.
- * `navigator.onLine` is deliberately not consulted — it reports link state rather than
- * whether Firestore is actually reachable.
- */
-function deleteMessage(err: unknown): string {
-  if ((err as { code?: unknown } | null)?.code === 'unavailable') {
-    return 'No connection. A book can only be deleted online, so nothing was changed.'
-  }
-  return 'Could not delete this book.'
-}
-
 export function Book() {
   const { bookId = null } = useParams()
   const uid = useAuth((s) => s.user?.uid ?? null)
@@ -70,12 +46,8 @@ export function Book() {
   const book = useBook(books, bookId)
   const notes = useBookNotes(uid, bookId)
   const select = useLibrary((s) => s.select)
-  const selectedBookId = useLibrary((s) => s.selectedBookId)
   const navigate = useNavigate()
 
-  const [confirmOpen, setConfirmOpen] = useState(false)
-  const [deleting, setDeleting] = useState(false)
-  const [deleted, setDeleted] = useState(false)
 
   const [filter, setFilter] = useState('')
   const deferredFilter = useDeferredValue(filter)
@@ -101,27 +73,11 @@ export function Book() {
 
   if (!uid) return <Navigate to="/" replace />
 
-  // Above the `!book` guard, and the ordering is the whole point. Deleting your only book
-  // leaves `books.length === 0`, which the guard below reads as "still loading" and
-  // answers with `null` — a blank screen that never resolves, because no book is ever
-  // coming.
-  if (deleted) return <Navigate to="/books" replace />
-
   // The books subscription has to deliver before we can tell "still loading" from
   // "no such book", so an empty shelf is treated as the former.
   if (!book) {
     return books.length === 0 ? null : <Navigate to="/books" replace />
   }
-
-  /**
-   * The count is the only safety net here — there is no undo — so the confirmation spends
-   * its words on it. `> 0` rather than `!== 0` because `forgetNoteOnBook` decrements
-   * without a floor, and a drifted counter must not offer to delete "-1 notes".
-   */
-  const cost =
-    book.noteCount > 0
-      ? `“${book.title}” and its ${book.noteCount} note${book.noteCount === 1 ? '' : 's'} will be permanently deleted.`
-      : `“${book.title}” will be permanently deleted.`
 
   const canExport = hasExportableNotes(notes)
 
@@ -144,26 +100,6 @@ export function Book() {
     )
   }
 
-  const remove = async () => {
-    setDeleting(true)
-    try {
-      await deleteBook(uid, book.id, () => {
-        // Fired after the server read and before the first batch lands, so we leave the
-        // screen ahead of the book disappearing out from under it — which is also what
-        // keeps the dialog from being unmounted mid-write.
-        if (selectedBookId === book.id) select(null)
-        setDeleted(true)
-      })
-      toast.success('Book deleted.')
-    } catch (err) {
-      // Still on this screen with the dialog open: everything that can throw happens
-      // before the callback, so nothing has been deleted and trying again is safe.
-      console.error('[marginalia] delete book failed', err)
-      toast.error(deleteMessage(err))
-      setDeleting(false)
-    }
-  }
-
   return (
     <ReadingScreen width="wide">
       <header className="flex items-center gap-2">
@@ -175,47 +111,31 @@ export function Book() {
         <h1 className="line-clamp-1 flex-1 font-semibold">{book.title}</h1>
       </header>
 
+      {/*
+        Identity as plain text, not as inputs.
+
+        Until 2026-08-25 the title and author were live text fields here, and the metadata
+        the scanner brings back joined them. Eric's objection on the day that shipped is the
+        right one: a live field above the notes you came to read is a mis-tap away from
+        rewriting a title the scanner got right. `SPEC §9` wants a correction to be
+        *reachable* — it does not want every field *armed*. Corrections moved to
+        `/books/:id/details`, behind an explicit Edit.
+      */}
       <div className="flex gap-4">
         <BookCover title={book.title} coverUrl={book.coverUrl} className="w-20 shrink-0" />
 
-        <div className="flex min-w-0 flex-1 flex-col gap-2">
-          {/* Metadata is frequently wrong (SPEC §9), so it stays editable forever —
-              uncontrolled, so a keystroke never races the Firestore snapshot. */}
-          <Input
-            key={`${book.id}-title`}
-            defaultValue={book.title}
-            onBlur={(event) => {
-              const value = event.target.value.trim()
-              if (value && value !== book.title) void updateBook(uid, book.id, { title: value })
-            }}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') event.currentTarget.blur()
-            }}
-            aria-label="Book title"
-            className="h-9 font-medium"
-          />
-          <Input
-            key={`${book.id}-authors`}
-            defaultValue={book.authors.join(', ')}
-            onBlur={(event) => {
-              const authors = event.target.value
-                .split(',')
-                .map((name) => name.trim())
-                .filter((name) => name.length > 0)
-              if (authors.join(', ') !== book.authors.join(', ')) {
-                void updateBook(uid, book.id, { authors })
-              }
-            }}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') event.currentTarget.blur()
-            }}
-            placeholder="Author"
-            aria-label="Author"
-            className="h-9 text-sm"
-          />
+        <div className="flex min-w-0 flex-1 flex-col justify-center gap-1">
+          <p className="font-medium">{book.title}</p>
+          {book.subtitle ? (
+            <p className="text-muted-foreground text-sm">{book.subtitle}</p>
+          ) : null}
+          <p className="text-muted-foreground text-sm">{book.authors.join(', ') || 'Unknown author'}</p>
           <p className="text-muted-foreground text-xs">
             {book.noteCount} note{book.noteCount === 1 ? '' : 's'}
           </p>
+          <Button variant="link" asChild className="h-auto justify-start p-0 text-xs">
+            <Link to={`/books/${book.id}/details`}>Details and editing</Link>
+          </Button>
         </div>
       </div>
 
@@ -309,58 +229,6 @@ export function Book() {
           </div>
         </div>
       )}
-
-      {/* `Delete book` rather than `Delete`, because this sits directly below the book's
-          notes and the bare word reads as acting on one of them. */}
-      <AlertDialog
-        open={confirmOpen}
-        onOpenChange={(next) => {
-          // A delete in flight owns the dialog until it resolves. Cancel is already gone
-          // by then, but Escape would otherwise pull the loading state out from under it.
-          if (deleting) return
-          setConfirmOpen(next)
-        }}
-      >
-        <AlertDialogTrigger asChild>
-          <Button variant="ghost" size="sm" className="text-muted-foreground mt-auto self-start">
-            <Trash2 className="h-3.5 w-3.5" />
-            Delete book
-          </Button>
-        </AlertDialogTrigger>
-
-        <AlertDialogContent onEscapeKeyDown={(event) => deleting && event.preventDefault()}>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete this book?</AlertDialogTitle>
-            <AlertDialogDescription>
-              {cost} This cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            {/* Withdrawn once the write starts — there is nothing left to cancel, and a
-                dead-but-visible button is worse than none. */}
-            {deleting ? null : <AlertDialogCancel>Keep it</AlertDialogCancel>}
-            <AlertDialogAction
-              variant="destructive"
-              disabled={deleting}
-              // Radix closes on Action by default. The dialog has to stay up and show the
-              // work instead, because the server read it is waiting on can still fail.
-              onClick={(event) => {
-                event.preventDefault()
-                void remove()
-              }}
-            >
-              {deleting ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Deleting…
-                </>
-              ) : (
-                'Delete'
-              )}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </ReadingScreen>
   )
 }

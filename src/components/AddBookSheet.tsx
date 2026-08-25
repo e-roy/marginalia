@@ -15,7 +15,8 @@ import {
 } from '@/components/ui/sheet'
 import { createBook, type NewBook } from '@/lib/books'
 import { isCameraSupported } from '@/lib/camera'
-import { searchBooks, type BookCandidate } from '@/lib/openLibrary'
+import { formatPublication } from '@/lib/format'
+import { searchBooks, type BookCandidate, type TocEntry } from '@/lib/openLibrary'
 
 interface AddBookSheetProps {
   uid: string
@@ -49,6 +50,19 @@ export interface Draft {
   openLibraryKey: string | null
   /** Set only by the scanner; the other two paths have no ISBN to offer. */
   isbn13: string | null
+  /**
+   * Carried through the form but not edited in it. The form asks for the two things a
+   * reader can correct from the book in their hand; the rest is Open Library's, shown
+   * below as a summary and editable later on the Book screen where there is room for it.
+   */
+  subtitle: string | null
+  publishYear: number | null
+  pageCount: number | null
+  publisher: string | null
+  subjects: string[]
+  subjectPeople: string[]
+  description: string | null
+  tableOfContents: TocEntry[]
 }
 
 function draftFrom(candidate: BookCandidate): Draft {
@@ -58,12 +72,34 @@ function draftFrom(candidate: BookCandidate): Draft {
     coverUrl: candidate.coverUrl,
     openLibraryKey: candidate.openLibraryKey,
     isbn13: candidate.isbn13,
+    subtitle: candidate.subtitle,
+    publishYear: candidate.firstPublishYear,
+    pageCount: candidate.pageCount,
+    publisher: candidate.publisher,
+    subjects: candidate.subjects,
+    subjectPeople: candidate.subjectPeople,
+    description: candidate.description,
+    tableOfContents: candidate.tableOfContents,
   }
 }
 
 /** A blank form, which is what "add it by hand" and a book Open Library doesn't know both start from. */
 function emptyDraft(title: string, isbn13: string | null = null): Draft {
-  return { title, authorsText: '', coverUrl: null, openLibraryKey: null, isbn13 }
+  return {
+    title,
+    authorsText: '',
+    coverUrl: null,
+    openLibraryKey: null,
+    isbn13,
+    subtitle: null,
+    publishYear: null,
+    pageCount: null,
+    publisher: null,
+    subjects: [],
+    subjectPeople: [],
+    description: null,
+    tableOfContents: [],
+  }
 }
 
 function toNewBook(draft: Draft): NewBook {
@@ -78,7 +114,36 @@ function toNewBook(draft: Draft): NewBook {
     // `Book.isbn13` has existed since M3 and nothing ever wrote a non-null value into
     // it. The scanner is what finally does.
     isbn13: draft.isbn13,
+    subtitle: draft.subtitle,
+    publishYear: draft.publishYear,
+    pageCount: draft.pageCount,
+    publisher: draft.publisher,
+    subjects: draft.subjects,
+    subjectPeople: draft.subjectPeople,
+    description: draft.description,
+    tableOfContents: draft.tableOfContents,
   }
+}
+
+/**
+ * A barcode that read cleanly and a book Open Library has never heard of.
+ *
+ * The two are indistinguishable on screen otherwise — both land on this form — and the
+ * blank one reads as "the scan failed". It usually has not: `979-8` is the Amazon KDP and
+ * independent-publishing range, where Open Library's coverage is thin, and
+ * `9798250875660` was reported as a book that "didn't scan" when in fact it decoded
+ * perfectly and simply is not in the catalogue.
+ *
+ * An ISBN with no title is the discriminator: manual entry never carries one, and a
+ * successful lookup always brings a title back (`lookupIsbn` returns null without one).
+ */
+function isScannedButUnknown(draft: Draft): boolean {
+  return draft.isbn13 !== null && draft.title.trim().length === 0
+}
+
+/** The publication line, over the draft — see `formatPublication`. */
+function metadataLine(draft: Draft): string | null {
+  return formatPublication(draft.publishYear, draft.pageCount, draft.publisher)
 }
 
 /**
@@ -173,14 +238,46 @@ export function AddBookSheet({
         <SheetHeader>
           <SheetTitle>{draft ? 'Add this book' : 'Add a book'}</SheetTitle>
           <SheetDescription>
-            {draft
-              ? 'Check the details — you can change them now or later.'
-              : 'Search Open Library, or add it by hand.'}
+            {!draft
+              ? 'Search Open Library, or add it by hand.'
+              : isScannedButUnknown(draft)
+                ? // Says the barcode was read, so a blank form is not mistaken for a
+                  // failed scan. The ISBN is kept either way.
+                  'Barcode read, but Open Library doesn’t have this one. Add the title yourself.'
+                : 'Check the details — you can change them now or later.'}
           </SheetDescription>
         </SheetHeader>
 
         {draft ? (
           <form onSubmit={submit} className="flex flex-col gap-4 px-4">
+            {/*
+              What the lookup found, shown rather than silently carried. A scan fetches a
+              cover, a subtitle, a year, a page count and a publisher, and until now the
+              form displayed none of it — so a correct scan and a scan of the wrong edition
+              looked identical. Absent for manual entry, which has nothing to show.
+            */}
+            {/* `draft.isbn13` is in this condition on purpose: a scan Open Library could
+                not resolve has no cover, no subtitle and no metadata line, and without it
+                the one thing the scan *did* establish would be hidden. */}
+            {draft.coverUrl || draft.subtitle || draft.isbn13 || metadataLine(draft) ? (
+              <div className="flex gap-3">
+                {draft.coverUrl ? (
+                  <BookCover title={draft.title} coverUrl={draft.coverUrl} className="w-14 shrink-0" />
+                ) : null}
+                <div className="flex min-w-0 flex-1 flex-col justify-center gap-1">
+                  {draft.subtitle ? (
+                    <p className="text-muted-foreground line-clamp-2 text-sm">{draft.subtitle}</p>
+                  ) : null}
+                  {metadataLine(draft) ? (
+                    <p className="text-muted-foreground text-xs">{metadataLine(draft)}</p>
+                  ) : null}
+                  {draft.isbn13 ? (
+                    <p className="text-muted-foreground font-mono text-xs">{draft.isbn13}</p>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+
             <div className="flex flex-col gap-1.5">
               <label htmlFor="book-title" className="text-sm font-medium">
                 Title

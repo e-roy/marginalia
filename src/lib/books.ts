@@ -17,7 +17,7 @@ import {
 import { deleteAudio } from '@/lib/audioQueue'
 import { withDeadline } from '@/lib/deadline'
 import { db } from '@/lib/firebase'
-import type { Book } from '@/lib/types'
+import type { Book, BookWithId } from '@/lib/types'
 
 /**
  * The shelf (SPEC §6, §9).
@@ -37,8 +37,62 @@ export function bookRef(uid: string, bookId: string) {
 
 /** What any of the three add-a-book paths supplies. Everything else has a default. */
 export type NewBook = Partial<
-  Pick<Book, 'authors' | 'coverUrl' | 'openLibraryKey' | 'isbn13' | 'status'>
+  Pick<
+    Book,
+    | 'authors'
+    | 'coverUrl'
+    | 'openLibraryKey'
+    | 'isbn13'
+    | 'status'
+    | 'subtitle'
+    | 'publishYear'
+    | 'pageCount'
+    | 'publisher'
+    | 'subjects'
+    | 'subjectPeople'
+    | 'description'
+    | 'tableOfContents'
+  >
 > & { title: string }
+
+/**
+ * The one place a Firestore book document becomes a `Book`.
+ *
+ * **A document is whatever was written to it, not whatever the interface says.** Every book
+ * created before 2026-08-24 predates `subtitle`, `publishYear`, `pageCount`, `publisher` and
+ * `subjects`, so those fields are `undefined` on the wire while `Book` types them
+ * `string | null` and `string[]`. `subjects` is the dangerous one — `undefined.map()` is a
+ * crash, and the shelf renders every book.
+ *
+ * Both raw reads go through here: `useBooks` in `@/hooks/useLibrary` and `exportAll` in
+ * `@/lib/export`. Those were the only two `as Book` casts in the client, and the export one
+ * is the easy one to miss — the per-book export button is fed by `useBook`, so a regression
+ * there would look fine on the Book screen and only surface on **Export all**.
+ *
+ * `chapterTitles` is defaulted for the same reason: `export.ts` already reached for it with
+ * an optional chain, which was this hazard met once and patched at one site instead of at
+ * the boundary.
+ *
+ * The functions side is deliberately out of reach here — `pipeline.ts` reads the document
+ * with its own cast and stays defensive with `book?.field`.
+ */
+export function toBook(id: string, data: unknown): BookWithId {
+  const raw = data as Partial<Book>
+
+  return {
+    ...(raw as Book),
+    id,
+    chapterTitles: raw.chapterTitles ?? {},
+    subtitle: raw.subtitle ?? null,
+    publishYear: raw.publishYear ?? null,
+    pageCount: raw.pageCount ?? null,
+    publisher: raw.publisher ?? null,
+    subjects: raw.subjects ?? [],
+    subjectPeople: raw.subjectPeople ?? [],
+    description: raw.description ?? null,
+    tableOfContents: raw.tableOfContents ?? [],
+  }
+}
 
 /**
  * Returns the new book's id so the caller can select it immediately — adding a book is
@@ -54,6 +108,14 @@ export async function createBook(uid: string, input: NewBook): Promise<string> {
     openLibraryKey: input.openLibraryKey ?? null,
     isbn13: input.isbn13 ?? null,
     status: input.status ?? 'reading',
+    subtitle: input.subtitle ?? null,
+    publishYear: input.publishYear ?? null,
+    pageCount: input.pageCount ?? null,
+    publisher: input.publisher ?? null,
+    subjects: input.subjects ?? [],
+    subjectPeople: input.subjectPeople ?? [],
+    description: input.description ?? null,
+    tableOfContents: input.tableOfContents ?? [],
     chapterTitles: {},
     currentChapter: 1,
     noteCount: 0,
@@ -75,7 +137,26 @@ export function updateBook(
   uid: string,
   bookId: string,
   fields: Partial<
-    Pick<Book, 'title' | 'authors' | 'currentChapter' | 'status' | 'coverUrl' | 'isbn13'>
+    Pick<
+      Book,
+      | 'title'
+      | 'authors'
+      | 'currentChapter'
+      | 'status'
+      | 'coverUrl'
+      | 'isbn13'
+      // Metadata is frequently wrong and stays editable forever (`SPEC §9`) — which for
+      // these five matters more than usual, since Open Library is the only thing that ever
+      // fills them and a book added by hand starts with all five blank.
+      | 'subtitle'
+      | 'publishYear'
+      | 'pageCount'
+      | 'publisher'
+      | 'subjects'
+      | 'subjectPeople'
+      | 'description'
+      | 'tableOfContents'
+    >
   >,
 ): Promise<void> {
   return updateDoc(bookRef(uid, bookId), { ...fields, updatedAt: serverTimestamp() })

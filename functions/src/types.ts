@@ -43,6 +43,13 @@ export interface BookDoc {
   title: string;
   authors: string[];
   chapterTitles: Record<string, string>;
+  /**
+   * Optional, and that is not laziness. `pipeline.ts` casts the snapshot straight to this
+   * type, and the client's `toBook` normalization does not reach across the wire — so a
+   * book written before 2026-08-24 genuinely has no `subtitle` key. `buildPrompt` already
+   * treats `authors` and `chapterTitles` the same defensive way.
+   */
+  subtitle?: string | null;
 }
 
 export interface ServerHealth {

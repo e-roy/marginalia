@@ -90,11 +90,17 @@ hosting target serves whatever is sitting in `dist/`.
   designing custom UI. Only hand-roll what the registry doesn't have.
 - **zustand** for app-wide state. Component-local state stays local — don't reach for a
   store by default.
-- **`vite-plugin-pwa`** for the manifest and service worker. It caches the app shell,
-  plus the barcode-decoder chunk once someone has actually opened the scanner — **never
-  Firestore traffic or Storage uploads.** Firestore has its own IndexedDB persistence.
-  The decoder is the one `runtimeCaching` entry: `globPatterns` would otherwise precache
-  125 kB gzip of ZXing for every install, including the many that never scan anything.
+- **`vite-plugin-pwa`** for the manifest and service worker. It caches the app shell, plus
+  two `runtimeCaching` entries — **never Firestore traffic or Storage uploads.** Firestore
+  has its own IndexedDB persistence, and caching sync traffic would corrupt it.
+  - **The barcode decoder**, once someone has actually opened the scanner. `globPatterns`
+    would otherwise precache 125 kB gzip of ZXing for every install, including the many that
+    never scan anything (ADR-015).
+  - **Book covers** from `covers.openlibrary.org`, `CacheFirst`. Open Library serves them
+    with `Cache-Control: public` and **no `max-age`**, so the browser revalidates over the
+    network before painting — which is why a cover was slow every time and often missing.
+    They send `Access-Control-Allow-Origin: *`, so these are real cached responses rather
+    than opaque ones (ADR-025).
 
 ## Verifying work
 

@@ -17,7 +17,11 @@ export function buildPrompt(
   const title = book?.title ?? bookTitle;
   if (!title) return null;
 
-  let prompt = `Notes on "${title}"`;
+  // The subtitle is where a book's actual subject matter usually lives — "Timeless Lessons
+  // on Wealth, Greed, and Happiness" primes Whisper for a whole vocabulary that "The
+  // Psychology of Money" does not. Free accuracy on the books that have one.
+  const subtitle = book?.subtitle?.trim();
+  let prompt = `Notes on "${subtitle ? `${title}: ${subtitle}` : title}"`;
 
   const authors = book?.authors?.filter((a) => a.trim().length > 0) ?? [];
   if (authors.length > 0) prompt += ` by ${authors.join(', ')}`;
