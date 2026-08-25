@@ -128,6 +128,9 @@ export function Scan() {
         pageCount: found?.pageCount ?? null,
         publisher: found?.publisher ?? null,
         subjects: found?.subjects ?? [],
+        subjectPeople: found?.subjectPeople ?? [],
+        description: found?.description ?? null,
+        tableOfContents: found?.tableOfContents ?? [],
       }
 
       // `replace` so the scanner is not left in history: a back-swipe out of the

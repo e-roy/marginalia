@@ -134,6 +134,7 @@ export function BookDetails() {
   /** Non-null is edit mode. Seeded from the book on entry, so Cancel is just dropping it. */
   const [draft, setDraft] = useState<Draft | null>(null)
   const [saving, setSaving] = useState(false)
+  const [contentsOpen, setContentsOpen] = useState(false)
 
   // The books subscription has not delivered yet, or the book is gone — the shelf is the
   // honest destination either way, and matches what the Book screen does.
@@ -301,19 +302,77 @@ export function BookDetails() {
         </form>
       ) : (
         <>
+          {/*
+            Open Library's blurb. Read-only, like the contents list below, and unlike every
+            field in the Edit form — those are things a reader *knows better* about a book in
+            their hands, where this is a third party's copy that there is no local truth to
+            correct it against.
+          */}
+          {book.description ? (
+            <p className="text-muted-foreground text-sm leading-relaxed whitespace-pre-line">
+              {book.description}
+            </p>
+          ) : null}
+
           <dl className="divide-border divide-y">
             <Row label="Published" value={published || null} />
             <Row label="ISBN" value={book.isbn13} />
             <Row label="Subjects" value={book.subjects.join(', ') || null} />
+            <Row label="People" value={book.subjectPeople.join(', ') || null} />
             <Row
               label="Notes"
               value={`${book.noteCount} note${book.noteCount === 1 ? '' : 's'}`}
             />
           </dl>
 
+          {/*
+            The printed contents, collapsed by default — 50 entries is not something to
+            scroll past on a phone to reach anything else.
+
+            This is **not** `chapterTitles` and must never be written into it: these are the
+            publisher's numbers and titles, where `chapterTitles` is what the reader sets and
+            what reaches the Whisper prompt. A book can perfectly well have a contents list
+            that disagrees with the chapters you are actually stepping through.
+          */}
+          {book.tableOfContents.length > 0 ? (
+            <div className="flex flex-col gap-2">
+              <Button
+                variant="outline"
+                onClick={() => setContentsOpen((open) => !open)}
+                aria-expanded={contentsOpen}
+              >
+                {contentsOpen ? 'Hide' : 'Show'} contents ({book.tableOfContents.length})
+              </Button>
+
+              {contentsOpen ? (
+                <ol className="divide-border divide-y">
+                  {book.tableOfContents.map((entry, index) => (
+                    <li
+                      key={`${entry.chapter ?? 'x'}-${index}`}
+                      className="flex items-baseline gap-3 py-1.5 text-sm"
+                    >
+                      <span className="text-muted-foreground w-6 shrink-0 text-right text-xs">
+                        {entry.chapter ?? ''}
+                      </span>
+                      <span className="min-w-0 flex-1">{entry.title}</span>
+                      {entry.page === null ? null : (
+                        <span className="text-muted-foreground shrink-0 text-xs">{entry.page}</span>
+                      )}
+                    </li>
+                  ))}
+                </ol>
+              ) : null}
+            </div>
+          ) : null}
+
           {/* Every metadata field is empty on a book added by hand, and an empty screen
               with an Edit button in the corner does not say that loudly enough. */}
-          {!published && !book.isbn13 && book.subjects.length === 0 ? (
+          {!published &&
+          !book.isbn13 &&
+          !book.description &&
+          book.subjects.length === 0 &&
+          book.subjectPeople.length === 0 &&
+          book.tableOfContents.length === 0 ? (
             <p className="text-muted-foreground text-sm">
               Nothing else recorded for this book yet. <strong>Edit</strong> to add it.
             </p>

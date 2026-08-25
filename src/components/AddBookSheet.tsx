@@ -15,7 +15,7 @@ import {
 } from '@/components/ui/sheet'
 import { createBook, type NewBook } from '@/lib/books'
 import { isCameraSupported } from '@/lib/camera'
-import { searchBooks, type BookCandidate } from '@/lib/openLibrary'
+import { searchBooks, type BookCandidate, type TocEntry } from '@/lib/openLibrary'
 
 interface AddBookSheetProps {
   uid: string
@@ -59,6 +59,9 @@ export interface Draft {
   pageCount: number | null
   publisher: string | null
   subjects: string[]
+  subjectPeople: string[]
+  description: string | null
+  tableOfContents: TocEntry[]
 }
 
 function draftFrom(candidate: BookCandidate): Draft {
@@ -73,6 +76,9 @@ function draftFrom(candidate: BookCandidate): Draft {
     pageCount: candidate.pageCount,
     publisher: candidate.publisher,
     subjects: candidate.subjects,
+    subjectPeople: candidate.subjectPeople,
+    description: candidate.description,
+    tableOfContents: candidate.tableOfContents,
   }
 }
 
@@ -89,6 +95,9 @@ function emptyDraft(title: string, isbn13: string | null = null): Draft {
     pageCount: null,
     publisher: null,
     subjects: [],
+    subjectPeople: [],
+    description: null,
+    tableOfContents: [],
   }
 }
 
@@ -109,6 +118,9 @@ function toNewBook(draft: Draft): NewBook {
     pageCount: draft.pageCount,
     publisher: draft.publisher,
     subjects: draft.subjects,
+    subjectPeople: draft.subjectPeople,
+    description: draft.description,
+    tableOfContents: draft.tableOfContents,
   }
 }
 

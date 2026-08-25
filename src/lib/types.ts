@@ -1,5 +1,7 @@
 import type { Timestamp } from 'firebase/firestore'
 
+import type { TocEntry } from '@/lib/openLibrary'
+
 /**
  * The Firestore data model, client side. Mirrors SPEC §6, and the functions keep their
  * own copy in `functions/src/types.ts` — both describe the same documents and neither
@@ -78,6 +80,21 @@ export interface Book {
   publisher: string | null
   /** Filtered and capped at eight by `subjectsOf`; the raw list runs to 30-odd. */
   subjects: string[]
+  /** People the book is *about* — "Richard Thaler", "Amos Tversky". Not its subjects. */
+  subjectPeople: string[]
+  /** The publisher's blurb, capped at 2 000 characters. */
+  description: string | null
+  /**
+   * The printed table of contents, as reference material.
+   *
+   * **Deliberately separate from `chapterTitles`, and the separation is load-bearing.**
+   * `chapterTitles` is what the reader sets and what `functions/src/prompt.ts` feeds to
+   * Whisper. This is what Open Library claims a book's chapters are. Writing one into the
+   * other would push a third party's titles into the transcription prompt without anyone
+   * deciding to — and the chapter *numbers* here are the publisher's, which need not agree
+   * with the numbers a reader steps through.
+   */
+  tableOfContents: TocEntry[]
 
   /** Chapter numbers ARE the identity — no chapter documents anywhere. */
   chapterTitles: Record<string, string>

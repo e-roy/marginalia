@@ -98,6 +98,39 @@ export default defineConfig({
               expiration: { maxEntries: 2 },
             },
           },
+          {
+            /**
+             * Book covers, which without this are **slow every single time**.
+             *
+             * `covers.openlibrary.org` answers with `Cache-Control: public` and **no
+             * `max-age`**, and no `Last-Modified` either — only an ETag. With no freshness
+             * lifetime the browser has nothing to compute staleness from, so it revalidates
+             * against the network before painting. That round trip is the delay, and on a
+             * slow or absent connection it is why a cover sometimes never appears at all.
+             * `CacheFirst` skips the revalidation entirely.
+             *
+             * Cached as **real** responses rather than opaque ones: covers send
+             * `Access-Control-Allow-Origin: *`, so there is no opaque-response quota
+             * penalty and the entries can be counted and bounded.
+             *
+             * This is third-party *image* traffic — it is neither Firestore sync nor a
+             * Storage upload, which is the line CLAUDE.md and the rule above actually draw.
+             * The alternatives were both worse: base64 in the book document would put
+             * ~25 kB on every book in a collection `useBooks` subscribes to whole, and
+             * Firebase Storage would be silently reclaimed by `storage.lifecycle.json`,
+             * which deletes everything under `users/` at one day old.
+             */
+            urlPattern: /^https:\/\/covers\.openlibrary\.org\/.*/,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'book-covers',
+              // Comfortably more books than a reader has, and ~19 kB each at `-M`. A year,
+              // because a cover for a given id is immutable — the id changes, not the image.
+              expiration: { maxEntries: 200, maxAgeSeconds: 60 * 60 * 24 * 365 },
+              // A cover that 404s must not be cached as though it were the artwork.
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
         ],
       },
       devOptions: {

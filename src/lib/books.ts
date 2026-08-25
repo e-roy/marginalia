@@ -49,6 +49,9 @@ export type NewBook = Partial<
     | 'pageCount'
     | 'publisher'
     | 'subjects'
+    | 'subjectPeople'
+    | 'description'
+    | 'tableOfContents'
   >
 > & { title: string }
 
@@ -85,6 +88,9 @@ export function toBook(id: string, data: unknown): BookWithId {
     pageCount: raw.pageCount ?? null,
     publisher: raw.publisher ?? null,
     subjects: raw.subjects ?? [],
+    subjectPeople: raw.subjectPeople ?? [],
+    description: raw.description ?? null,
+    tableOfContents: raw.tableOfContents ?? [],
   }
 }
 
@@ -107,6 +113,9 @@ export async function createBook(uid: string, input: NewBook): Promise<string> {
     pageCount: input.pageCount ?? null,
     publisher: input.publisher ?? null,
     subjects: input.subjects ?? [],
+    subjectPeople: input.subjectPeople ?? [],
+    description: input.description ?? null,
+    tableOfContents: input.tableOfContents ?? [],
     chapterTitles: {},
     currentChapter: 1,
     noteCount: 0,
@@ -144,6 +153,9 @@ export function updateBook(
       | 'pageCount'
       | 'publisher'
       | 'subjects'
+      | 'subjectPeople'
+      | 'description'
+      | 'tableOfContents'
     >
   >,
 ): Promise<void> {

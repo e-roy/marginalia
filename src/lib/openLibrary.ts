@@ -49,6 +49,30 @@ export interface BookCandidate {
   publisher: string | null
   pageCount: number | null
   subjects: string[]
+  /** People the book is *about*, which is not the same thing as its subjects. */
+  subjectPeople: string[]
+  /**
+   * The publisher's blurb. The **only** field that needs a second request — it is in
+   * `jscmd=details` and not in `jscmd=data` — so it is best-effort and null when that call
+   * fails or the record has none.
+   */
+  description: string | null
+  /**
+   * The printed table of contents.
+   *
+   * Deliberately **not** written into `Book.chapterTitles`, and that separation is the
+   * point. `chapterTitles` is what the reader sets and what `functions/src/prompt.ts` feeds
+   * to Whisper; this is what Open Library claims. Merging them would push a third party's
+   * chapter titles into the transcription prompt through the back door.
+   */
+  tableOfContents: TocEntry[]
+}
+
+export interface TocEntry {
+  /** The printed chapter number. Null for front matter and part dividers, which have none. */
+  chapter: number | null
+  title: string
+  page: number | null
 }
 
 /** The subset of `search.json` we ask for — anything else is not requested. */
@@ -75,6 +99,69 @@ interface LookupRecord {
   number_of_pages?: number
   publishers?: { name?: string }[]
   subjects?: { name?: string }[]
+  subject_people?: { name?: string }[]
+  table_of_contents?: { level?: number; label?: string; title?: string; pagenum?: string }[]
+}
+
+/**
+ * `jscmd=details` wraps a rather different record, and it is **not** a superset of
+ * `jscmd=data` — notably it has no `authors` at all on the records checked, only a `works`
+ * key, so it cannot replace the `data` call. It is fetched alongside purely for
+ * `description`.
+ */
+interface DetailsRecord {
+  details?: {
+    // Open Library returns this either as a plain string or as a typed `{ type, value }`
+    // object depending on when the record was last edited. Both are live in the data.
+    description?: string | { value?: string }
+  }
+}
+
+/** Long enough for a real blurb, short enough that a pathological record cannot bloat a document. */
+const DESCRIPTION_LIMIT = 2_000
+
+/**
+ * A TOC is reference data, not a chapter map — see `BookCandidate.tableOfContents`.
+ *
+ * `label` is the printed chapter number and is **empty for front matter and part
+ * dividers** ("Introduction", "PART I. Two Systems"), which are kept with a null chapter
+ * because they are real rows of a real table of contents. `pagenum` is likewise a string
+ * and likewise sometimes empty.
+ */
+const TOC_LIMIT = 100
+
+function tableOfContentsOf(record: LookupRecord): TocEntry[] {
+  const entries: TocEntry[] = []
+
+  for (const row of record.table_of_contents ?? []) {
+    const title = row.title?.trim()
+    if (!title) continue
+
+    const chapter = row.label && /^\d+$/.test(row.label.trim()) ? Number(row.label.trim()) : null
+    const page = row.pagenum && /^\d+$/.test(row.pagenum.trim()) ? Number(row.pagenum.trim()) : null
+
+    entries.push({ chapter, title, page })
+    if (entries.length === TOC_LIMIT) break
+  }
+
+  return entries
+}
+
+function subjectPeopleOf(record: LookupRecord): string[] {
+  const seen = new Set<string>()
+  const kept: string[] = []
+
+  for (const person of record.subject_people ?? []) {
+    const name = person.name?.trim()
+    if (!name) continue
+    const key = name.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    kept.push(name)
+    if (kept.length === SUBJECT_LIMIT) break
+  }
+
+  return kept
 }
 
 /**
@@ -151,6 +238,9 @@ function toCandidate(doc: SearchDoc): BookCandidate | null {
     publisher: null,
     pageCount: null,
     subjects: [],
+    subjectPeople: [],
+    description: null,
+    tableOfContents: [],
   }
 }
 
@@ -223,16 +313,49 @@ export async function searchBooks(
  * from that — an empty body has no key either — and both land the caller on the same
  * prefilled form, so the ambiguity costs nothing here.
  */
+function lookupUrl(isbn13: string, jscmd: 'data' | 'details'): URL {
+  const url = new URL(LOOKUP_URL)
+  url.searchParams.set('bibkeys', `ISBN:${isbn13}`)
+  url.searchParams.set('format', 'json')
+  url.searchParams.set('jscmd', jscmd)
+  return url
+}
+
+/**
+ * The description, or null. Never throws.
+ *
+ * A second request, fired **concurrently** with the `data` one rather than after it, so it
+ * costs a connection but not a wait. Best-effort by construction: a blurb is worth having
+ * and is worth nothing at the price of losing the book, which is the same stance `SPEC §9`
+ * takes on the whole lookup.
+ */
+async function fetchDescription(isbn13: string, signal?: AbortSignal): Promise<string | null> {
+  try {
+    const response = await fetch(lookupUrl(isbn13, 'details'), {
+      signal: withTimeout(LOOKUP_TIMEOUT_MS, signal),
+    })
+    if (!response.ok) return null
+
+    const body = (await response.json()) as Record<string, DetailsRecord | undefined>
+    const raw = body[`ISBN:${isbn13}`]?.details?.description
+    const text = (typeof raw === 'string' ? raw : raw?.value)?.trim()
+    return text ? text.slice(0, DESCRIPTION_LIMIT) : null
+  } catch {
+    return null
+  }
+}
+
 export async function lookupIsbn(
   isbn13: string,
   signal?: AbortSignal,
 ): Promise<BookCandidate | null> {
-  const url = new URL(LOOKUP_URL)
-  url.searchParams.set('bibkeys', `ISBN:${isbn13}`)
-  url.searchParams.set('format', 'json')
-  url.searchParams.set('jscmd', 'data')
+  // Concurrent, not sequential. `description` is the only reason for the second call and it
+  // is optional, so waiting for it in series would make every scan slower for a blurb.
+  const [response, description] = await Promise.all([
+    fetch(lookupUrl(isbn13, 'data'), { signal: withTimeout(LOOKUP_TIMEOUT_MS, signal) }),
+    fetchDescription(isbn13, signal),
+  ])
 
-  const response = await fetch(url, { signal: withTimeout(LOOKUP_TIMEOUT_MS, signal) })
   if (!response.ok) {
     throw new Error(`Open Library lookup failed (${response.status})`)
   }
@@ -261,5 +384,8 @@ export async function lookupIsbn(
     publisher: record.publishers?.[0]?.name?.trim() || null,
     pageCount: typeof record.number_of_pages === 'number' ? record.number_of_pages : null,
     subjects: subjectsOf(record),
+    subjectPeople: subjectPeopleOf(record),
+    description,
+    tableOfContents: tableOfContentsOf(record),
   }
 }

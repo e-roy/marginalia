@@ -338,6 +338,15 @@ interface Book {
   pageCount: number | null;
   publisher: string | null;       // the first, where authors keeps all of them
   subjects: string[];             // filtered and capped at 8 — the raw list runs to 30-odd
+  subjectPeople: string[];        // people the book is ABOUT, not its subjects
+  description: string | null;     // the publisher's blurb, capped at 2 000 chars
+
+  // The PRINTED contents, as reference material — deliberately NOT chapterTitles.
+  // chapterTitles is what the reader sets and what the Whisper prompt reads (§7);
+  // this is what Open Library claims, and its numbering need not agree with the
+  // chapters a reader actually steps through. Merging them would put a third
+  // party's titles into the transcription prompt without anyone deciding to.
+  tableOfContents: { chapter: number | null; title: string; page: number | null }[];
 
   // Chapter numbers ARE the identity. No chapter IDs anywhere.
   // Titles are optional and resolved at render time from this map.
@@ -644,8 +653,16 @@ still bringing the barcode into frame. Note the format's own blind spot: the
 alternating 1/3 weighting cannot detect two adjacent digits swapped when they
 differ by exactly 5.
 
-**Lookup.** One call, returning title, subtitle, authors, cover, publisher,
-publication year, page count and subjects:
+**Lookup.** Two calls, fired **concurrently** so the second costs a connection
+but not a wait. `jscmd=data` is authoritative and returns title, subtitle,
+authors, cover, publisher, publication year, page count, subjects, the people a
+book is about, and its printed table of contents. `jscmd=details` is fetched
+only for the `description`, is **best-effort**, and never costs the book if it
+fails — it is not a superset of `data` and cannot replace it, having no
+`authors` field at all on the records checked.
+
+The table of contents is stored on its own and **never written into
+`chapterTitles`**: that map is the reader's, and `§7`'s Whisper prompt reads it.
 
 ```
 https://openlibrary.org/api/books?bibkeys=ISBN:{isbn13}&format=json&jscmd=data
