@@ -45,11 +45,15 @@ export function formatCountdown(value: Timestamp | null, nowMs = Date.now()): st
 /**
  * `Aug 14`, or `Aug 14, 2025` when it is not this year — and **null when it is today**.
  *
- * Null rather than a string, because "today" is the one case where a date is noise: the
- * Now screen's feed is filtered to today by construction, so every row there would carry
- * the same redundant word. Everywhere else — a book's notes, a search result, a note you
- * opened by URL — a bare `9:41 AM` names a moment without saying which day, which is no
- * use at all on a note from three weeks ago.
+ * Null rather than a string, because a note from today is the one case where naming the
+ * day adds nothing: you were there. Everywhere else — a book's notes, a search result, a
+ * note you opened by URL — a bare `9:41 AM` names a moment without saying which day,
+ * which is no use at all on a note from three weeks ago.
+ *
+ * Every list in the app therefore mixes dated and undated rows, and that is the intent:
+ * the undated ones are today's. Until 2026-08-25 the Now screen was the exception, being
+ * filtered to today by construction — it now shows one book's recent notes whenever they
+ * were made, so the mix appears there too.
  *
  * Locale-formatted, unlike the export's `YYYY-MM-DD` (`markdown.ts`): this is read on
  * screen by one person, where a Markdown file is a durable artifact that must not change
@@ -80,7 +84,8 @@ export function chapterAnchor(chapter: number | null): string {
   return `chapter-${chapter ?? 'unfiled'}`
 }
 
-export function isToday(value: Timestamp | null): boolean {
+/** Module-private: `formatNoteDate` above is the only caller, and the only one wanted. */
+function isToday(value: Timestamp | null): boolean {
   if (!value) return true // an unacked write is, by definition, from just now
   const date = value.toDate()
   const now = new Date()

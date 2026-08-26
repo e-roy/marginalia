@@ -213,7 +213,7 @@ export function Book() {
         // width — the cover, the editable metadata, the shelf tabs and the two buttons
         // are a header band, not part of the reading column.
         <div className="lg:grid lg:grid-cols-[14rem_minmax(0,1fr)] lg:gap-10">
-          <ChapterIndex groups={groups} chapterTitles={book.chapterTitles} />
+          <ChapterIndex groups={groups} book={book} />
 
           <div className="flex flex-col gap-6">
             {groups.map((group) => (

@@ -109,10 +109,10 @@ export function useAllNotes(uid: string | null): NoteWithId[] {
  * Every book, in one subscription, sorted on the client.
  *
  * A reader has tens of books — the whole shelf is a few kilobytes, and holding it in
- * memory means the recent-books strip, the shelf and the chapter stepper all read from
- * one snapshot rather than three queries. It also sidesteps `orderBy('lastNoteAt')`,
- * which sorts nulls last on a descending order and would therefore hide a book you had
- * just added and not yet recorded against.
+ * memory means the book switcher, the shelf and the chapter stepper all read from one
+ * snapshot rather than three queries. It also sidesteps `orderBy('lastNoteAt')`, which
+ * sorts nulls last on a descending order and would therefore hide a book you had just
+ * added and not yet recorded against.
  */
 export function useBooks(uid: string | null): BookWithId[] {
   const [books, setBooks] = useState<BookWithId[]>([])
@@ -122,16 +122,40 @@ export function useBooks(uid: string | null): BookWithId[] {
     return onSnapshot(
       booksCollection(uid),
       (snapshot) => {
-        // `toBook`, not a bare cast: books written before the metadata fields existed lack
-        // them entirely, and `subjects` in particular is read with `.map`.
-        setBooks(snapshot.docs.map((entry) => toBook(entry.id, entry.data())))
+        /**
+         * `toBook`, not a bare cast: books written before the metadata fields existed lack
+         * them entirely, and `subjects` in particular is read with `.map`.
+         *
+         * `serverTimestamps: 'estimate'` is what keeps the Now screen still while you use
+         * it. `recordNoteOnBook` writes `lastNoteAt: serverTimestamp()`, and the default
+         * `'none'` reads a pending write back as **null** from the local cache — so for
+         * the whole window between recording a note and the server acking it, the book you
+         * just recorded against sorts by its `createdAt` instead and can fall below
+         * another. Where `selectedBookId` is null that book *is* `books[0]`, i.e. the
+         * selection, so the header, the stepper, the capture target and the feed would all
+         * jump to a different book the moment you finished speaking. Offline — which this
+         * app is built to be — that window is not milliseconds.
+         *
+         * The option is **snapshot-wide, not per-field**: `createdAt` and `updatedAt` read
+         * back as estimates here too. Neither has a reader today, but anything added later
+         * that displays them (an "Added on…" line, say) would be showing a local estimate
+         * rather than the server's time, and should say so or read the document elsewhere.
+         */
+        setBooks(
+          snapshot.docs.map((entry) =>
+            toBook(entry.id, entry.data({ serverTimestamps: 'estimate' })),
+          ),
+        )
       },
       (err) => console.error('[marginalia] books subscription failed', err),
     )
   }, [uid])
 
-  // Most recently used first: a book with no notes yet falls back to when it was added,
-  // and a document still waiting on its server timestamps counts as right now.
+  // Most recently used first: a book with no notes yet falls back to when it was added.
+  // The `MAX_SAFE_INTEGER` arm used to be the load-bearing one — a document still waiting
+  // on its server timestamps counted as right now — but with `serverTimestamps: 'estimate'`
+  // above, a pending write already reads as a real time. It is kept as a floor for the
+  // case that option cannot cover: a document carrying no timestamps at all.
   return useMemo(() => {
     if (!uid) return []
     const touchedAt = (book: BookWithId) =>

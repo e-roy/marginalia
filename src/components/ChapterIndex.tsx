@@ -1,10 +1,18 @@
+import { chapterHeading } from '@/lib/books'
 import { chapterAnchor } from '@/lib/format'
-import type { NoteWithId } from '@/lib/types'
+import type { Book, NoteWithId } from '@/lib/types'
 
 interface ChapterIndexProps {
   /** Exactly the groups the notes column renders, so the two cannot disagree. */
   groups: { chapter: number | null; notes: NoteWithId[] }[]
-  chapterTitles: Record<string, string>
+  /**
+   * Narrowed to the two fields a heading is derived from rather than taking the whole
+   * book — this is a presentational list and has no business with the rest of it. Both
+   * are needed because a chapter's name is the reader's title *or* the printed contents
+   * (ADR-026), and showing only the first is what made a book with 24 contents entries
+   * look like it had none.
+   */
+  book: Pick<Book, 'chapterTitles' | 'tableOfContents'>
 }
 
 /**
@@ -26,7 +34,7 @@ interface ChapterIndexProps {
  * highlights the chapter you are currently in — that would need an IntersectionObserver,
  * and it is not what this is for.
  */
-export function ChapterIndex({ groups, chapterTitles }: ChapterIndexProps) {
+export function ChapterIndex({ groups, book }: ChapterIndexProps) {
   return (
     <nav aria-label="Chapters" className="hidden lg:sticky lg:top-6 lg:block lg:self-start">
       <p className="text-muted-foreground mb-3 text-xs font-medium tracking-wide uppercase">
@@ -35,7 +43,7 @@ export function ChapterIndex({ groups, chapterTitles }: ChapterIndexProps) {
 
       <ul className="flex flex-col gap-0.5">
         {groups.map(({ chapter, notes }) => {
-          const title = chapter === null ? null : (chapterTitles?.[String(chapter)] ?? null)
+          const heading = chapterHeading(book, chapter)
 
           return (
             <li key={chapterAnchor(chapter)}>
@@ -47,9 +55,9 @@ export function ChapterIndex({ groups, chapterTitles }: ChapterIndexProps) {
                   <span className="block truncate text-sm font-medium">
                     {chapter === null ? 'Unfiled' : `Chapter ${chapter}`}
                   </span>
-                  {title ? (
+                  {heading ? (
                     <span className="text-muted-foreground block truncate text-xs italic">
-                      {title}
+                      {heading.title}
                     </span>
                   ) : null}
                 </span>

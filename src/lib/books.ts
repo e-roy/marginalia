@@ -94,6 +94,49 @@ export function toBook(id: string, data: unknown): BookWithId {
   }
 }
 
+export interface ChapterHeading {
+  title: string
+  /**
+   * `reader` — typed by hand into `chapterTitles`, and therefore the one
+   * `functions/src/prompt.ts` feeds to Whisper. `printed` — Open Library's contents,
+   * shown on screen and **never** written anywhere the prompt can reach.
+   */
+  source: 'reader' | 'printed'
+}
+
+/**
+ * What to call a chapter on screen: the reader's own title if they have set one, and
+ * otherwise the printed contents.
+ *
+ * This is the display half of [[ADR-026]], and the whole point is that it is *only* the
+ * display half. A book that arrives with 24 contents entries and an empty `chapterTitles`
+ * used to show nothing but "Chapter 4", which reads as though the data never arrived —
+ * Eric reported exactly that on 2026-08-25. The obvious fix is to pre-fill `chapterTitles`
+ * from the contents, and ADR-026 rejects it for two reasons that both still hold: it would
+ * feed a third party's titles to the transcription model through `prompt.ts`, which he
+ * ruled out explicitly, and the publisher's numbering need not agree with the numbering the
+ * chapter stepper has been counting.
+ *
+ * So the two stay separate in storage and merge only at the point of rendering, where
+ * `source` lets every caller say which it is showing. Nothing here writes.
+ */
+export function chapterHeading(
+  book: Pick<Book, 'chapterTitles' | 'tableOfContents'>,
+  chapter: number | null,
+): ChapterHeading | null {
+  // Unfiled is not a chapter and has no number to match on.
+  if (chapter === null) return null
+
+  const reader = book.chapterTitles?.[String(chapter)]?.trim()
+  if (reader) return { title: reader, source: 'reader' }
+
+  // Front matter and part dividers carry `chapter: null` and must never match a real
+  // chapter number — `find` on a null-vs-number comparison would be a silent mismatch.
+  const printed = book.tableOfContents?.find((entry) => entry.chapter === chapter)
+  const title = printed?.title?.trim()
+  return title ? { title, source: 'printed' } : null
+}
+
 /**
  * Returns the new book's id so the caller can select it immediately — adding a book is
  * always in service of writing a note about it.
@@ -186,8 +229,12 @@ export function setChapterTitle(
 }
 
 /**
- * Bump the counters a new note implies. `lastNoteAt` is what orders the recent-books
- * strip, so this is also what makes a book "current" again after switching away.
+ * Bump the counters a new note implies. `lastNoteAt` is what orders the book switcher,
+ * so this is also what makes a book "current" again after switching away — and what
+ * `resolveSelected` falls back to when nothing is stored. It is written with
+ * `serverTimestamp()`, which reads back null from the local cache until the server acks
+ * it; `useBooks` reads the snapshot with `serverTimestamps: 'estimate'` so that window
+ * cannot re-order the shelf under the Now screen.
  */
 export function recordNoteOnBook(uid: string, bookId: string): Promise<void> {
   return updateDoc(bookRef(uid, bookId), {
@@ -315,10 +362,10 @@ export async function deleteBook(
 /**
  * The other half, for a deleted note.
  *
- * `lastNoteAt` is deliberately left where it is. It orders the recent-books strip by
- * when you last *touched* a book, and recording a note then deleting it is still
- * having touched it — so the stale value is the honest one. Correcting it would mean
- * querying for the new newest note to adjust a tile's position in a five-tile strip.
+ * `lastNoteAt` is deliberately left where it is. It orders the book switcher by when
+ * you last *touched* a book, and recording a note then deleting it is still having
+ * touched it — so the stale value is the honest one. Correcting it would mean querying
+ * for the new newest note to adjust one row's position in a list.
  */
 export function forgetNoteOnBook(uid: string, bookId: string): Promise<void> {
   return updateDoc(bookRef(uid, bookId), {

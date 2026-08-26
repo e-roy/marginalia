@@ -152,11 +152,77 @@ export interface TranscribeInput {
   prompt: string | null;
 }
 
+export interface TranscribeResult {
+  /** The verbatim transcript. Present whichever response format answered. */
+  text: string;
+  /** Which format the server actually accepted — `json` means the fallback ran. */
+  format: 'verbose_json' | 'json';
+  /**
+   * Seconds of audio the model reports having decoded. **This is the number that says
+   * whether the server saw the whole recording**: compare it against the client's
+   * `durationMs`. Null under plain `json`, which carries no timings.
+   */
+  decodedSec: number | null;
+  segmentCount: number | null;
+  /**
+   * The largest silence between consecutive segments, in seconds, and where it starts.
+   *
+   * This is what locates a hole. On 2026-08-25 a note counting slowly to twenty came back
+   * as `1,2,3,4,5,16,17,18,19,20` — the middle gone, the tail intact, which rules out both
+   * of the recorded hypotheses (they each predict *trailing* loss) and rules out the
+   * recorder outright, since `MediaRecorder` runs with no timeslice and emits one blob.
+   * A large gap here means the audio between those stamps was dropped before decoding —
+   * VAD, most likely. Segments that run contiguously across the whole duration with words
+   * missing anyway means the decoder skipped, which points at the distil model or at
+   * greedy decoding on repetitive speech.
+   */
+  largestGapSec: number | null;
+  largestGapAtSec: number | null;
+}
+
+interface Segment {
+  start: number;
+  end: number;
+}
+
+/**
+ * A finite number, whether the server sent one or a numeric string.
+ *
+ * This is diagnostics parsing an API we cannot test against from here, so it coerces
+ * rather than assumes: OpenAI's schema says `duration` and the segment stamps are
+ * numbers, and compatible implementations are not all equally careful. `Number('')` is
+ * 0 and `Number(null)` is 0, so both are rejected explicitly rather than read as a
+ * timestamp at the start of the recording.
+ */
+function finiteNumber(value: unknown): number | null {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+/** Tolerant on purpose: a server that answers with a shape we don't know still transcribes. */
+function segmentsOf(body: Record<string, unknown>): Segment[] {
+  const raw = body.segments;
+  if (!Array.isArray(raw)) return [];
+  const out: Segment[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== 'object' || entry === null) continue;
+    const { start, end } = entry as Record<string, unknown>;
+    const from = finiteNumber(start);
+    const to = finiteNumber(end);
+    if (from !== null && to !== null) out.push({ start: from, end: to });
+  }
+  return out.sort((a, b) => a.start - b.start);
+}
+
 /** Stage 1. `POST /v1/audio/transcriptions`, multipart. Returns verbatim text. */
 export async function transcribe(
   cfg: SpeechConfig,
   input: TranscribeInput,
-): Promise<string> {
+): Promise<TranscribeResult> {
   // Node's Buffer is typed `Uint8Array<ArrayBufferLike>`, which Blob will not accept
   // because ArrayBufferLike admits SharedArrayBuffer. Bytes downloaded from Storage
   // never are, so narrow the backing store rather than copying up to 25 MB of audio
@@ -167,15 +233,38 @@ export async function transcribe(
     input.audio.byteLength,
   );
 
-  const form = new FormData();
-  form.append('file', new Blob([bytes], { type: input.contentType }), input.filename);
-  form.append('model', input.model);
-  form.append('response_format', 'json');
-  form.append('temperature', '0');
-  if (input.prompt) form.append('prompt', input.prompt);
-
   const path = '/v1/audio/transcriptions';
-  const res = await request(cfg, path, { method: 'POST', body: form }, TRANSCRIBE_TIMEOUT_MS);
+
+  const send = (format: 'verbose_json' | 'json') => {
+    // A fresh FormData per attempt: a body stream cannot be replayed.
+    const form = new FormData();
+    form.append('file', new Blob([bytes], { type: input.contentType }), input.filename);
+    form.append('model', input.model);
+    form.append('response_format', format);
+    form.append('temperature', '0');
+    if (input.prompt) form.append('prompt', input.prompt);
+    return request(cfg, path, { method: 'POST', body: form }, TRANSCRIBE_TIMEOUT_MS);
+  };
+
+  /**
+   * `verbose_json` first, for the timings — and **falling back to `json` on a 4xx**,
+   * which is not defensive padding but the difference between a diagnostic and a
+   * catastrophe. `stt_rejected` is in `pipeline.ts`'s `TERMINAL_CODES`, and a terminal
+   * failure discards the recording: if this server does not implement `verbose_json`,
+   * asking for it unconditionally would turn every note into a permanently unrecoverable
+   * one. The timings are worth having; they are not worth a single lost note.
+   *
+   * A 5xx is not retried here — that is the tunnel or the model being unavailable, which
+   * `stt_unavailable` already routes into the backoff queue, and re-sending the audio
+   * would double the upload for nothing.
+   */
+  let format: 'verbose_json' | 'json' = 'verbose_json';
+  let res = await send(format);
+
+  if (!res.ok && res.status < 500) {
+    format = 'json';
+    res = await send(format);
+  }
 
   if (!res.ok) {
     // A 4xx here is usually a model that isn't in PRELOAD_MODELS — a hard reject, not
@@ -184,16 +273,38 @@ export async function transcribe(
     throw new SpeechError(code, await detailOf(res, path));
   }
 
-  const body: unknown = await res.json().catch(() => null);
-  const text =
-    typeof body === 'object' && body !== null
-      ? (body as Record<string, unknown>).text
-      : null;
+  const parsed: unknown = await res.json().catch(() => null);
+  const body =
+    typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : {};
+  const text = body.text;
 
   if (typeof text !== 'string') {
     throw new SpeechError('stt_rejected', `${path} → 200 with no text field`);
   }
-  return text.trim();
+
+  const segments = segmentsOf(body);
+  let largestGapSec: number | null = null;
+  let largestGapAtSec: number | null = null;
+  for (let i = 1; i < segments.length; i++) {
+    // `noUncheckedIndexedAccess` is on, so both ends are bound rather than asserted.
+    const previous = segments[i - 1];
+    const current = segments[i];
+    if (!previous || !current) continue;
+    const gap = current.start - previous.end;
+    if (largestGapSec === null || gap > largestGapSec) {
+      largestGapSec = gap;
+      largestGapAtSec = previous.end;
+    }
+  }
+
+  return {
+    text: text.trim(),
+    format,
+    decodedSec: finiteNumber(body.duration),
+    segmentCount: segments.length > 0 ? segments.length : null,
+    largestGapSec,
+    largestGapAtSec,
+  };
 }
 
 /**

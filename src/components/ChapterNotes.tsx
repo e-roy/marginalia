@@ -3,7 +3,7 @@ import { useState } from 'react'
 
 import { NoteList } from '@/components/NoteList'
 import { Input } from '@/components/ui/input'
-import { setChapterTitle } from '@/lib/books'
+import { chapterHeading, setChapterTitle } from '@/lib/books'
 import { chapterAnchor } from '@/lib/format'
 import type { BookWithId, NoteWithId } from '@/lib/types'
 
@@ -24,6 +24,8 @@ interface ChapterNotesProps {
 export function ChapterNotes({ uid, book, chapter, notes, terms = [] }: ChapterNotesProps) {
   const [editing, setEditing] = useState(false)
   const title = chapter === null ? null : (book.chapterTitles?.[String(chapter)] ?? null)
+  /** Reader's title, else the printed contents — display only (ADR-026). */
+  const heading = chapterHeading(book, chapter)
 
   const commit = (value: string) => {
     setEditing(false)
@@ -48,7 +50,9 @@ export function ChapterNotes({ uid, book, chapter, notes, terms = [] }: ChapterN
       {chapter === null ? null : editing ? (
         <Input
           autoFocus
-          defaultValue={title ?? ''}
+          /* Seeded from the printed contents when the reader has no title of their own,
+             so adopting it is one tap and still their decision (ADR-026). */
+          defaultValue={title ?? heading?.title ?? ''}
           onBlur={(event) => commit(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === 'Enter') event.currentTarget.blur()
@@ -64,8 +68,13 @@ export function ChapterNotes({ uid, book, chapter, notes, terms = [] }: ChapterN
           onClick={() => setEditing(true)}
           className="text-muted-foreground hover:text-foreground flex items-center gap-1 self-start rounded text-xs transition-colors"
         >
-          {title ? (
-            <span className="italic">{title}</span>
+          {heading ? (
+            <>
+              <span className="italic">{heading.title}</span>
+              {heading.source === 'printed' ? (
+                <span className="opacity-70">· as printed</span>
+              ) : null}
+            </>
           ) : (
             <>
               <Plus className="h-3 w-3" />

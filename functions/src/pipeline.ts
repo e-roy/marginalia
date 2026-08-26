@@ -221,13 +221,14 @@ export async function runTranscription(
       throw new SpeechError('audio_missing', toLogDetail(err));
     }
 
-    const rawText = await transcribe(cfg, {
+    const stt = await transcribe(cfg, {
       audio,
       filename: `${noteId}.${extensionFor(input.contentType, input.ext)}`,
       contentType: input.contentType ?? 'audio/mp4',
       model,
       prompt: buildPrompt(note.bookTitle, book, note.chapter),
     });
+    const rawText = stt.text;
 
     // Stage 2. Best-effort by construction: at worst this returns `cleanText: null`
     // and the UI falls back to the transcript — a sleeping Ollama can never cost a
@@ -268,6 +269,22 @@ export async function runTranscription(
      * `audioBitsPerSecond` entirely and produced roughly 99.
      */
     const durationMs = note.durationMs ?? null;
+
+    /**
+     * The STT timings, which are what locate a *hole* rather than a truncation.
+     *
+     * `bytes`/`durationMs` above discriminate recorder-vs-model, and on 2026-08-25 the
+     * counting-to-twenty test made that question narrower rather than answering it:
+     * `1,2,3,4,5,16,17,18,19,20` is a middle dropout, and the recorder cannot produce one
+     * (no timeslice, one blob). These three say where the audio went instead.
+     *
+     * `decodedVsRecordedPct` is the headline: what fraction of the recording the model
+     * reports having decoded. Well under 100 means the server never saw the rest.
+     * `sttLargestGapSec` says whether the missing span was silence-stripped before
+     * decoding. `sttFormat` is here because it says whether the other two mean anything —
+     * `json` is the fallback, and carries no timings at all.
+     */
+    const decodedSec = stt.decodedSec;
     logger.info('pipeline: done', {
       uid,
       noteId,
@@ -283,6 +300,15 @@ export async function runTranscription(
           ? Math.round((input.size * 8) / durationMs)
           : null,
       contentType: input.contentType ?? null,
+      sttFormat: stt.format,
+      sttDecodedSec: decodedSec,
+      sttSegments: stt.segmentCount,
+      sttLargestGapSec: stt.largestGapSec,
+      sttLargestGapAtSec: stt.largestGapAtSec,
+      decodedVsRecordedPct:
+        decodedSec !== null && durationMs && durationMs > 0
+          ? Math.round((decodedSec * 1000 * 100) / durationMs)
+          : null,
     });
     return { outcome: 'done' };
   } catch (err) {
