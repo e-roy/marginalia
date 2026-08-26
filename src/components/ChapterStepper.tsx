@@ -3,7 +3,7 @@ import { useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { setChapterTitle, updateBook } from '@/lib/books'
+import { chapterHeading, setChapterTitle, updateBook } from '@/lib/books'
 import type { BookWithId } from '@/lib/types'
 
 interface ChapterStepperProps {
@@ -22,6 +22,12 @@ export function ChapterStepper({ uid, book }: ChapterStepperProps) {
 
   const chapter = book.currentChapter
   const chapterTitle = chapter === null ? null : (book.chapterTitles?.[String(chapter)] ?? null)
+  /**
+   * The reader's title if there is one, else the printed contents (ADR-026). Display
+   * only — `commitTitle` below is still the only thing that writes, so nothing here can
+   * reach the Whisper prompt on its own.
+   */
+  const heading = chapterHeading(book, chapter)
 
   /** Stepping below chapter 1 lands on Unfiled, which is always available (SPEC §8). */
   const step = (delta: number) => {
@@ -38,10 +44,9 @@ export function ChapterStepper({ uid, book }: ChapterStepperProps) {
 
   return (
     <div className="flex flex-col gap-2">
-      <p className="text-center text-base leading-tight font-medium text-balance">
-        {book.title}
-      </p>
-
+      {/* No book title here. The Now screen names the book directly above this, with its
+          cover and a Switch control, and two titles stacked is how a screen meant to be
+          about one book still manages to look busy. */}
       <div className="flex items-center justify-center gap-1">
         <Button variant="ghost" size="icon" onClick={() => step(-1)} aria-label="Previous chapter">
           <ChevronLeft className="h-5 w-5" />
@@ -60,7 +65,10 @@ export function ChapterStepper({ uid, book }: ChapterStepperProps) {
       {chapter === null ? null : editingTitle ? (
         <Input
           autoFocus
-          defaultValue={chapterTitle ?? ''}
+          /* Seeded with the printed title when the reader has none, so adopting Open
+             Library's wording is one tap — but still *their* tap. ADR-026 allows the
+             two to merge deliberately; it only forbids it happening on its own. */
+          defaultValue={chapterTitle ?? heading?.title ?? ''}
           onBlur={(event) => commitTitle(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === 'Enter') event.currentTarget.blur()
@@ -76,8 +84,16 @@ export function ChapterStepper({ uid, book }: ChapterStepperProps) {
           onClick={() => setEditingTitle(true)}
           className="text-muted-foreground hover:text-foreground mx-auto flex items-center gap-1 rounded text-xs transition-colors"
         >
-          {chapterTitle ? (
-            <span className="line-clamp-1 italic">{chapterTitle}</span>
+          {heading ? (
+            <>
+              <span className="line-clamp-1 italic">{heading.title}</span>
+              {/* Said out loud, because the two are different claims: this is what the
+                  publisher printed, not what the reader called it, and the publisher's
+                  chapter numbering need not match the stepper's. */}
+              {heading.source === 'printed' ? (
+                <span className="shrink-0 opacity-70">· as printed</span>
+              ) : null}
+            </>
           ) : (
             <>
               <Plus className="h-3 w-3" />

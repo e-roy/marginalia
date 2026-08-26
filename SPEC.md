@@ -354,7 +354,7 @@ interface Book {
   currentChapter: number | null;          // per-book resume point; null = Unfiled
 
   noteCount: number;
-  lastNoteAt: Timestamp | null;   // drives the recent-books strip
+  lastNoteAt: Timestamp | null;   // orders the book switcher
   createdAt: Timestamp;
   updatedAt: Timestamp;
 }
@@ -421,8 +421,13 @@ function, or the pipeline. If you typed it, you meant it.
 **Composite indexes**
 
 - `notes`: `bookId ASC, chapter ASC, recordedAt ASC` — book detail
-- `notes`: `recordedAt DESC` — home feed
-- `books`: `lastNoteAt DESC` — recent-books strip
+
+That is the only one this app declares. Two more were listed here until 2026-08-25 —
+`notes: recordedAt DESC` and `books: lastNoteAt DESC` — and **neither is a composite
+index at all**: both order on a single field, which Firestore serves from its automatic
+per-field indexes, so neither ever appeared in `firestore.indexes.json` or needed to.
+The books query does not even order in Firestore — `useBooks` reads the collection whole
+and sorts on the client.
 
 `retrySweep` runs across every user, so its indexes are **`COLLECTION_GROUP`**
 scope. A `COLLECTION`-scoped index of the same fields cannot serve a
@@ -459,9 +464,19 @@ losing the note.
 |---|---|
 | `file` | the audio blob, filename extension matching the real container |
 | `model` | from settings, or auto-picked per §5 |
-| `response_format` | `json` |
+| `response_format` | `verbose_json`, falling back to `json` on a 4xx |
 | `temperature` | `0` |
 | `prompt` | book context — see below |
+
+`verbose_json` is asked for because it carries `duration` and per-segment timings, and
+those are what locate a **hole** in a transcript rather than a truncation — see the
+missing-transcript investigation in the vault. **The fallback is not defensive padding.**
+`stt_rejected` is terminal in `pipeline.ts`, and a terminal failure discards the
+recording, so asking unconditionally for a format this server might not implement would
+turn every note into a permanently unrecoverable one. A 5xx is *not* retried: that is the
+tunnel or the model being unavailable, which the backoff queue already handles, and
+re-sending the audio would double the upload for nothing. The completion log records
+`sttFormat`, so which path ran is always visible.
 
 The `prompt` field is the highest-leverage detail in this document. Whisper
 accepts an initial prompt that biases decoding, so feed it the book:
@@ -539,27 +554,48 @@ it. Everything else is secondary.
 
 ```
 ┌─────────────────────────────────────┐
-│  [cover] [cover] [cover] [cover]    │  ← recent books, by lastNoteAt
-│   ▔▔▔▔▔                             │     tap to switch
-│                                     │
-│  Thinking, Fast and Slow            │
-│  Chapter 12  ‹ ›        + title     │  ← ‹ › step chapters, no dialog
+│  ┌────┐  Thinking, Fast and Slow    │  ← the one book this note is for
+│  │cvr │  Daniel Kahneman  [ Switch ]│     Switch opens the book sheet
+│  └────┘                             │
+│       Chapter 12  ‹ ›     + title   │  ← ‹ › step chapters, no dialog
 │                                     │
 │           ( ●  RECORD )             │  ← one tap, already scoped
 │              ⌨ type instead         │
 │                                     │
-│  Today                              │
+│  Recent notes        All 12 notes → │  ← this book's, newest first
 │  ▸ 09:41  The availability heur…    │
 │  ▸ 09:47  Transcribing…             │
 └─────────────────────────────────────┘
 ```
 
-- **Opens ready to record.** Current book, current chapter, big button. One tap.
+- **A resume opens ready to record; a cold launch opens the shelf.** Coming back to a
+  backgrounded app is the case this whole design exists for — mid-chapter, a thought, one
+  tap — so it lands on the record screen with the current book and chapter. Starting the
+  app fresh is a different moment: the selection is a pointer that may be days old, and
+  once the Now screen became about *one* book, opening cold onto it means the app guesses.
+  So a cold launch goes to **Books**. Detected with a `sessionStorage` marker, which is
+  empty on a new document load and set on every later render of it; a deep link is never
+  rewritten. See ADR-027.
 - **Tap to start, tap to stop.** Not hold-to-talk — you may be holding a book.
 - **Chapter is a stepper**, not a picker. `›` advances, and the number is the
   identity, so nothing needs creating. Adding a title is an optional aside.
-- **Recent books strip** shows the last four books touched. Switching is a tap;
-  each book remembers its own `currentChapter`.
+- **A chapter shows its name where one is known** — the reader's own title if they have
+  set one, and otherwise the printed contents from Open Library, marked *as printed*
+  because the two are different claims and the publisher's numbering need not agree with
+  the stepper's. **Display only.** Nothing writes the printed title into `chapterTitles`,
+  which is what `prompt.ts` feeds to Whisper — ADR-026 turns on that separation. Tapping
+  to add a title seeds the field with the printed one, so adopting it is one tap and still
+  the reader's decision.
+- **The screen is about one book.** It names that book — cover, title, author — with
+  its chapter directly below, and shows no other book anywhere. The three things it
+  owes are *which book and chapter is this going under*, *record*, and *did it land*.
+  Reading back is the Book screen's job and finding is Search's.
+- **Switching is a deliberate two taps**, behind a **Switch** control that opens a
+  sheet listing every book, most recently touched first, with **Add a book** in it.
+  Each book still brings its own `currentChapter`. Until 2026-08-25 this was a
+  permanent strip of four covers, which made switching free and in doing so made the
+  capture screen about the shelf. The block naming the book is deliberately *not*
+  tappable: a correction must be reachable, not armed (`SPEC §9`).
 - **Which book is selected is device-local**, held in `localStorage` under
   `marginalia.selectedBook`, falling back to the most recently touched book when it
   is missing or names a book that no longer exists. It is a resume pointer for one
@@ -577,7 +613,7 @@ it. Everything else is secondary.
 
 | Screen | Purpose |
 |---|---|
-| Now | Recent books, chapter stepper, record + type, today's notes |
+| Now | One book — cover, title and author — plus chapter stepper, record + type, and that book's recent notes. **Switch** opens the book sheet |
 | Books | Shelf grouped by reading / finished / shelved; add book |
 | Book | Cover, title, subtitle and author as **plain text**; reading status; chapters with note counts; notes grouped by chapter; add titles; filter this book's notes; export; delete book. On a wide viewport a sticky chapter index sits beside the notes |
 | Book details | Everything the app knows about a book, **read-only until you tap Edit**: title, subtitle, author, year, pages, publisher, ISBN, subjects |
@@ -596,9 +632,13 @@ Book screen filters that book's notes **in place**, so the chapter structure sur
 case-insensitive substring matching, AND across words, over what is actually on
 screen (`cleanText ?? rawText`, the note's title, the book's title).
 
-A note carries the **date** as well as the time everywhere except the Now screen's
-feed, which is filtered to today by construction. A bare `9:41 AM` on a note from
-three weeks ago names a moment without saying which day.
+A note carries the **date** as well as the time — except when it was made today, where
+naming the day adds nothing because you were there. So every list mixes dated and
+undated rows, and the undated ones are today's. A bare `9:41 AM` on a note from three
+weeks ago names a moment without saying which day.
+
+*Until 2026-08-25 the Now screen was the exception, being filtered to today by
+construction. It now shows one book's recent notes whenever they were made.*
 
 ---
 
